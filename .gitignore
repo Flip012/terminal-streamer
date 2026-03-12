@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+venv/
+.venv/
+server/config.json
+
+# Flutter
+client/.dart_tool/
+client/.packages
+client/build/
+client/.flutter-plugins
+client/.flutter-plugins-dependencies
+client/pubspec.lock
+client/.metadata
+client/android/.gradle/
+client/android/local.properties
+client/android/app/build/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.DS_Store
