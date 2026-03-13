@@ -1,25 +1,42 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/widgets.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:xterm/xterm.dart';
 import '../models/server_config.dart';
+import 'question_detector.dart';
+import 'notification_service.dart';
 
-class TerminalService {
+class TerminalService with WidgetsBindingObserver {
   final ServerConfig config;
   final String sessionId;
+  final String sessionTitle;
   final Terminal terminal;
 
   WebSocketChannel? _channel;
   StreamSubscription? _subscription;
   bool _disposed = false;
 
+  final _questionDetector = QuestionDetector();
+  Timer? _questionCheckTimer;
+  bool _appInBackground = false;
+
   TerminalService({
     required this.config,
     required this.sessionId,
     required this.terminal,
+    this.sessionTitle = 'Terminal',
   });
 
   void connect() {
+    WidgetsBinding.instance.addObserver(this);
+
+    // Periodically check for questions (every 500ms)
+    _questionCheckTimer = Timer.periodic(
+      const Duration(milliseconds: 500),
+      (_) => _checkForQuestion(),
+    );
+
     final uri = Uri.parse(
       '${config.wsBaseUrl}/ws/terminal/$sessionId?api_key=${Uri.encodeComponent(config.apiKey)}',
     );
@@ -60,7 +77,9 @@ class TerminalService {
 
       if (type == 'output') {
         final bytes = base64Decode(data['data'] as String);
-        terminal.write(String.fromCharCodes(bytes));
+        final text = String.fromCharCodes(bytes);
+        terminal.write(text);
+        _questionDetector.onOutput(text);
       } else if (type == 'exit') {
         terminal.write('\r\n[Session ended]\r\n');
       }
@@ -81,8 +100,35 @@ class TerminalService {
     }
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appInBackground = state != AppLifecycleState.resumed;
+    if (!_appInBackground) {
+      // App came to foreground — cancel any pending notification
+      NotificationService.instance.cancelNotification(sessionId.hashCode);
+    }
+  }
+
+  void _checkForQuestion() {
+    if (_disposed) return;
+    // Only notify when app is in background
+    if (!_appInBackground) return;
+
+    final question = _questionDetector.checkForQuestion();
+    if (question != null) {
+      NotificationService.instance.showQuestionNotification(
+        sessionTitle: sessionTitle,
+        questionText: question.length > 150 ? '${question.substring(0, 147)}...' : question,
+        sessionHash: sessionId.hashCode,
+      );
+    }
+  }
+
   void dispose() {
     _disposed = true;
+    _questionCheckTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _questionDetector.reset();
     _subscription?.cancel();
     _channel?.sink.close();
   }

@@ -33,6 +33,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
       config: widget.config,
       sessionId: widget.session.id,
       terminal: _terminal,
+      sessionTitle: widget.session.title,
     );
     _terminalService.connect();
   }
