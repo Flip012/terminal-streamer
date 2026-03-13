@@ -3,12 +3,17 @@ import base64
 import json
 import signal
 import sys
+import time
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 from typing import Optional
+from pathlib import Path
+from pywebpush import webpush, WebPushException
 
 from config import load_config, get_default_shell
 from terminal_manager import TerminalManager
@@ -25,6 +30,13 @@ app.add_middleware(
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 manager = TerminalManager()
+
+# In-memory push subscription store: {endpoint: subscription_info}
+push_subscriptions: dict[str, dict] = {}
+
+# Track last output time per session for idle detection
+last_output_time: dict[str, float] = {}
+IDLE_THRESHOLD_SECONDS = 5  # notify if output after this many seconds of silence
 
 
 async def verify_api_key(api_key: Optional[str] = Depends(api_key_header)):
@@ -79,6 +91,61 @@ async def resize_session(session_id: str, req: ResizeRequest):
     raise HTTPException(status_code=404, detail="Session not found")
 
 
+# --- Push notification endpoints ---
+
+
+class PushSubscriptionRequest(BaseModel):
+    subscription: dict
+
+
+@app.get("/api/push/vapid-public-key", dependencies=[Depends(verify_api_key)])
+async def get_vapid_public_key():
+    return {"publicKey": config["vapid_public_key"]}
+
+
+@app.post("/api/push/subscribe", dependencies=[Depends(verify_api_key)])
+async def push_subscribe(req: PushSubscriptionRequest):
+    endpoint = req.subscription.get("endpoint", "")
+    if not endpoint:
+        raise HTTPException(status_code=400, detail="Missing endpoint")
+    push_subscriptions[endpoint] = req.subscription
+    return {"status": "ok"}
+
+
+@app.post("/api/push/unsubscribe", dependencies=[Depends(verify_api_key)])
+async def push_unsubscribe(req: PushSubscriptionRequest):
+    endpoint = req.subscription.get("endpoint", "")
+    push_subscriptions.pop(endpoint, None)
+    return {"status": "ok"}
+
+
+def send_push_notification(title: str, body: str, tag: str = "terminal"):
+    """Send push notification to all subscribed clients."""
+    dead_endpoints = []
+    for endpoint, sub_info in push_subscriptions.items():
+        try:
+            webpush(
+                subscription_info=sub_info,
+                data=json.dumps({"title": title, "body": body, "tag": tag}),
+                vapid_private_key=config["vapid_private_key"],
+                vapid_claims={"sub": config["vapid_contact"]},
+            )
+        except WebPushException as e:
+            if e.response and e.response.status_code in (404, 410):
+                dead_endpoints.append(endpoint)
+        except Exception:
+            pass
+    for ep in dead_endpoints:
+        push_subscriptions.pop(ep, None)
+
+
+# --- Serve web client ---
+
+CLIENT_WEB_DIR = Path(__file__).parent.parent / "client-web"
+
+app.mount("/web", StaticFiles(directory=str(CLIENT_WEB_DIR), html=True), name="client-web")
+
+
 # --- WebSocket endpoint for terminal I/O ---
 
 
@@ -105,6 +172,13 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
                     await websocket.send_json({"type": "exit"})
                 except Exception:
                     pass
+                if push_subscriptions:
+                    send_push_notification(
+                        "Session beendet",
+                        f"Terminal-Session {session_id[:8]}... wurde beendet.",
+                        tag=f"exit-{session_id}",
+                    )
+                last_output_time.pop(session_id, None)
                 break
 
             data = await manager.read_output(session_id)
@@ -113,8 +187,23 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
                     await websocket.send_json({"type": "exit"})
                 except Exception:
                     pass
+                last_output_time.pop(session_id, None)
                 break
             if data:
+                now = time.time()
+                prev = last_output_time.get(session_id, now)
+                idle_duration = now - prev
+                last_output_time[session_id] = now
+
+                # Send push if output arrives after idle period
+                if idle_duration >= IDLE_THRESHOLD_SECONDS and push_subscriptions:
+                    preview = data[:200].decode("utf-8", errors="replace").strip()
+                    send_push_notification(
+                        "Neue Terminal-Ausgabe",
+                        preview[:120],
+                        tag=f"output-{session_id}",
+                    )
+
                 # Send as base64 to preserve binary data
                 await websocket.send_json({
                     "type": "output",

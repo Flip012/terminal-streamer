@@ -1,0 +1,17 @@
+{
+  "name": "Terminal Streamer",
+  "short_name": "TermStream",
+  "description": "Web-basierter Terminal-Client mit Push-Benachrichtigungen",
+  "start_url": "/web/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1a1a2e",
+  "theme_color": "#16213e",
+  "icons": [
+    {
+      "src": "icon-192.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
