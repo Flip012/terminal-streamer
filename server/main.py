@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import re
 import signal
 import sys
 import time
@@ -34,9 +35,66 @@ manager = TerminalManager()
 # In-memory push subscription store: {endpoint: subscription_info}
 push_subscriptions: dict[str, dict] = {}
 
-# Track last output time per session for idle detection
-last_output_time: dict[str, float] = {}
-IDLE_THRESHOLD_SECONDS = 5  # notify if output after this many seconds of silence
+# Track terminal output state per session for question detection
+session_output_state: dict[str, dict] = {}
+QUESTION_IDLE_SECONDS = 3  # seconds of silence before checking for question
+OUTPUT_BUFFER_MAX = 4096  # max bytes to buffer for pattern matching
+
+# Regex to strip ANSI escape sequences
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\x1b[()][AB012]|\x1b\[[\?]?[0-9;]*[hlm]")
+
+
+def strip_ansi(text: str) -> str:
+    return ANSI_ESCAPE_RE.sub("", text)
+
+
+def detect_question(raw_text: str) -> Optional[str]:
+    """Detect if terminal output contains a Claude Code question waiting for input.
+
+    Returns extracted question text or None.
+    """
+    text = strip_ansi(raw_text)
+    lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
+    if not lines:
+        return None
+
+    # Check last ~15 lines for question patterns
+    tail = lines[-15:]
+    tail_text = "\n".join(tail)
+
+    # Claude Code permission prompts (tool approval)
+    # e.g. "Allow Read /path?" or "Allow mcp__tool?"
+    for line in reversed(tail):
+        if re.search(r"\bAllow\b.*\?", line, re.IGNORECASE):
+            return line
+
+    # AskUserQuestion: numbered/bulleted options after a question
+    # Look for a line ending with ? followed by option lines
+    for i, line in enumerate(tail):
+        if line.endswith("?"):
+            # Check if followed by option-like lines (numbered, bulleted, or radio)
+            remaining = tail[i + 1:]
+            option_count = sum(
+                1 for r in remaining
+                if re.match(r"^(\d+[\.\)]\s|[-•●◉◯►▸]\s|>\s|\(\s*\)\s|\(\s*[xX•]\s*\)\s)", r)
+            )
+            if option_count >= 2:
+                return line
+            # Even without options, a question at the end of output is relevant
+            if i >= len(tail) - 3:
+                return line
+
+    # Generic question at the very end (last 3 lines)
+    for line in reversed(tail[-3:]):
+        if line.endswith("?") and len(line) > 10:
+            return line
+
+    # y/n prompts
+    for line in reversed(tail[-3:]):
+        if re.search(r"\(y/n\)|\(Y/n\)|\(y/N\)|\[y/N\]|\[Y/n\]", line, re.IGNORECASE):
+            return line
+
+    return None
 
 
 async def verify_api_key(api_key: Optional[str] = Depends(api_key_header)):
@@ -165,6 +223,9 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
 
     async def read_terminal():
         """Read terminal output and send to client."""
+        state = {"buffer": "", "last_output_time": time.time(), "notified": False}
+        session_output_state[session_id] = state
+
         while True:
             session = manager.sessions.get(session_id)
             if not session or not session._alive:
@@ -178,7 +239,7 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
                         f"Terminal-Session {session_id[:8]}... wurde beendet.",
                         tag=f"exit-{session_id}",
                     )
-                last_output_time.pop(session_id, None)
+                session_output_state.pop(session_id, None)
                 break
 
             data = await manager.read_output(session_id)
@@ -187,22 +248,15 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
                     await websocket.send_json({"type": "exit"})
                 except Exception:
                     pass
-                last_output_time.pop(session_id, None)
+                session_output_state.pop(session_id, None)
                 break
             if data:
-                now = time.time()
-                prev = last_output_time.get(session_id, now)
-                idle_duration = now - prev
-                last_output_time[session_id] = now
+                state["last_output_time"] = time.time()
+                state["notified"] = False
 
-                # Send push if output arrives after idle period
-                if idle_duration >= IDLE_THRESHOLD_SECONDS and push_subscriptions:
-                    preview = data[:200].decode("utf-8", errors="replace").strip()
-                    send_push_notification(
-                        "Neue Terminal-Ausgabe",
-                        preview[:120],
-                        tag=f"output-{session_id}",
-                    )
+                # Buffer recent output for question detection
+                text = data.decode("utf-8", errors="replace")
+                state["buffer"] = (state["buffer"] + text)[-OUTPUT_BUFFER_MAX:]
 
                 # Send as base64 to preserve binary data
                 await websocket.send_json({
@@ -210,6 +264,23 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
                     "data": base64.b64encode(data).decode("ascii"),
                 })
             else:
+                # No data — check if idle long enough for question detection
+                idle = time.time() - state["last_output_time"]
+                if (
+                    idle >= QUESTION_IDLE_SECONDS
+                    and not state["notified"]
+                    and push_subscriptions
+                    and state["buffer"]
+                ):
+                    question = detect_question(state["buffer"])
+                    if question:
+                        state["notified"] = True
+                        send_push_notification(
+                            "Claude Code wartet",
+                            question[:150],
+                            tag=f"question-{session_id}",
+                        )
+
                 await asyncio.sleep(0.02)
 
     async def write_terminal():
