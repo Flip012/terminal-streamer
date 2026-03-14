@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
 import '../models/server_config.dart';
 import '../models/terminal_session.dart';
@@ -21,7 +22,10 @@ class TerminalScreen extends StatefulWidget {
 class _TerminalScreenState extends State<TerminalScreen> {
   late final Terminal _terminal;
   late final TerminalService _terminalService;
-  final _terminalController = TerminalController();
+  final _terminalController = TerminalController(
+    // Enable drag-to-select text
+    pointerInputs: const PointerInputs({PointerInput.tap, PointerInput.scroll}),
+  );
   final _focusNode = FocusNode();
 
   @override
@@ -44,6 +48,41 @@ class _TerminalScreenState extends State<TerminalScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _terminalService.connect();
     });
+  }
+
+  void _copySelection() {
+    final selection = _terminalController.selection;
+    if (selection != null) {
+      final text = _terminal.buffer.getText(selection);
+      Clipboard.setData(ClipboardData(text: text));
+      _terminalController.clearSelection();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Kopiert'), duration: Duration(seconds: 1)),
+      );
+    }
+  }
+
+  void _showContextMenu(Offset position) {
+    final hasSelection = _terminalController.selection != null;
+    showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy),
+      items: [
+        if (hasSelection)
+          const PopupMenuItem(value: 'copy', child: Text('Kopieren')),
+        const PopupMenuItem(value: 'paste', child: Text('Einfügen')),
+      ],
+    ).then((value) {
+      if (value == 'copy') _copySelection();
+      if (value == 'paste') _pasteClipboard();
+    });
+  }
+
+  Future<void> _pasteClipboard() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (data?.text != null) {
+      _terminal.paste(data!.text!);
+    }
   }
 
   @override
@@ -73,6 +112,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
           PopupMenuButton<String>(
             onSelected: (value) {
               switch (value) {
+                case 'copy':
+                  _copySelection();
+                  break;
+                case 'paste':
+                  _pasteClipboard();
+                  break;
                 case 'ctrl_c':
                   _terminal.keyInput(TerminalKey.keyC, ctrl: true);
                   break;
@@ -91,6 +136,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
               }
             },
             itemBuilder: (_) => [
+              const PopupMenuItem(value: 'copy', child: Text('Kopieren')),
+              const PopupMenuItem(value: 'paste', child: Text('Einfügen')),
+              const PopupMenuDivider(),
               const PopupMenuItem(value: 'ctrl_c', child: Text('Ctrl+C')),
               const PopupMenuItem(value: 'ctrl_d', child: Text('Ctrl+D')),
               const PopupMenuItem(value: 'ctrl_z', child: Text('Ctrl+Z')),
@@ -101,12 +149,17 @@ class _TerminalScreenState extends State<TerminalScreen> {
         ],
       ),
       body: SafeArea(
-        child: TerminalView(
-          _terminal,
-          controller: _terminalController,
-          autofocus: true,
-          focusNode: _focusNode,
-          textStyle: terminalStyle,
+        child: GestureDetector(
+          onLongPressStart: (details) {
+            _showContextMenu(details.globalPosition);
+          },
+          child: TerminalView(
+            _terminal,
+            controller: _terminalController,
+            autofocus: true,
+            focusNode: _focusNode,
+            textStyle: terminalStyle,
+          ),
         ),
       ),
     );
