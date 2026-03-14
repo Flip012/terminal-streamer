@@ -129,6 +129,8 @@ class TerminalService with WidgetsBindingObserver {
         sessionTitle: sessionTitle,
         questionText: question.length > 150 ? '${question.substring(0, 147)}...' : question,
         sessionHash: sessionId.hashCode,
+        sessionId: sessionId,
+        config: config,
       );
     }
   }

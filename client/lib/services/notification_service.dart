@@ -1,4 +1,11 @@
+import 'dart:convert';
+import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import '../main.dart';
+import '../models/server_config.dart';
+import '../models/terminal_session.dart';
+import '../screens/terminal_screen.dart';
+import 'api_service.dart';
 
 class NotificationService {
   static final NotificationService _instance = NotificationService._();
@@ -22,13 +29,45 @@ class NotificationService {
   }
 
   void _onNotificationTap(NotificationResponse response) {
-    // Tapping the notification brings the app to foreground automatically.
+    final payload = response.payload;
+    if (payload == null) return;
+
+    try {
+      final data = jsonDecode(payload) as Map<String, dynamic>;
+      final config = ServerConfig.fromJson(data['config'] as Map<String, dynamic>);
+      final sessionId = data['sessionId'] as String;
+
+      _navigateToSession(config, sessionId);
+    } catch (_) {
+      // Malformed payload — just bring app to foreground.
+    }
+  }
+
+  Future<void> _navigateToSession(ServerConfig config, String sessionId) async {
+    final nav = navigatorKey.currentState;
+    if (nav == null) return;
+
+    try {
+      final api = ApiService(config);
+      final sessions = await api.listSessions();
+      final session = sessions.firstWhere((s) => s.id == sessionId);
+
+      nav.push(
+        MaterialPageRoute(
+          builder: (_) => TerminalScreen(config: config, session: session),
+        ),
+      );
+    } catch (_) {
+      // Session no longer exists or network error — just show the app.
+    }
   }
 
   Future<void> showQuestionNotification({
     required String sessionTitle,
     required String questionText,
     required int sessionHash,
+    required String sessionId,
+    required ServerConfig config,
   }) async {
     if (!_initialized) return;
 
@@ -43,11 +82,17 @@ class NotificationService {
 
     const details = NotificationDetails(android: androidDetails);
 
+    final payload = jsonEncode({
+      'sessionId': sessionId,
+      'config': config.toJson(),
+    });
+
     await _plugin.show(
       sessionHash,
       'Claude Code wartet',
       '$sessionTitle: $questionText',
       details,
+      payload: payload,
     );
   }
 
