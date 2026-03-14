@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#16213e" />
+  <title>Terminal Streamer</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: #16213e;
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #0f3460;
+    }
+
+    header h1 {
+      font-size: 18px;
+      color: #4ecca3;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    button {
+      background: #0f3460;
+      color: #e0e0e0;
+      border: 1px solid #4ecca3;
+      padding: 6px 14px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    button:hover { background: #4ecca3; color: #1a1a2e; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button.active { background: #4ecca3; color: #1a1a2e; }
+
+    /* --- Views --- */
+    .view { display: none; flex: 1; flex-direction: column; }
+    .view.active { display: flex; }
+
+    /* --- Connect View --- */
+    #connect-view {
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+
+    .connect-form {
+      background: #16213e;
+      padding: 30px;
+      border-radius: 8px;
+      width: 100%;
+      max-width: 400px;
+      border: 1px solid #0f3460;
+    }
+
+    .connect-form h2 {
+      color: #4ecca3;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+
+    .form-group {
+      margin-bottom: 14px;
+    }
+
+    .form-group label {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 13px;
+      color: #aaa;
+    }
+
+    .form-group input {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #0f3460;
+      border-radius: 4px;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      font-size: 14px;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 10px;
+    }
+
+    .form-row .form-group { flex: 1; }
+
+    .connect-form button {
+      width: 100%;
+      padding: 10px;
+      margin-top: 6px;
+      font-size: 15px;
+    }
+
+    /* --- Sessions View --- */
+    #sessions-view { padding: 20px; }
+
+    .sessions-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .session-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .session-card {
+      background: #16213e;
+      border: 1px solid #0f3460;
+      border-radius: 6px;
+      padding: 14px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .session-card:hover { border-color: #4ecca3; }
+
+    .session-info h3 {
+      font-size: 14px;
+      color: #4ecca3;
+    }
+
+    .session-info p {
+      font-size: 12px;
+      color: #888;
+      margin-top: 4px;
+    }
+
+    .session-actions { display: flex; gap: 6px; }
+
+    .btn-delete {
+      border-color: #e74c3c;
+      color: #e74c3c;
+      padding: 4px 10px;
+    }
+
+    .btn-delete:hover { background: #e74c3c; color: white; }
+
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 6px;
+    }
+
+    .status-dot.alive { background: #4ecca3; }
+    .status-dot.dead { background: #e74c3c; }
+
+    /* --- Terminal View --- */
+    #terminal-view { flex: 1; }
+
+    #terminal-container {
+      flex: 1;
+      padding: 4px;
+      background: #000;
+    }
+
+    .quick-keys {
+      display: flex;
+      gap: 4px;
+      padding: 6px 8px;
+      background: #16213e;
+      border-top: 1px solid #0f3460;
+      flex-wrap: wrap;
+    }
+
+    .quick-keys button {
+      padding: 4px 10px;
+      font-size: 12px;
+      font-family: monospace;
+    }
+
+    /* --- Push Toggle --- */
+    .push-toggle {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #888;
+    }
+
+    .push-toggle .indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #e74c3c;
+    }
+
+    .push-toggle .indicator.active { background: #4ecca3; }
+
+    /* --- Toast --- */
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #0f3460;
+      color: #4ecca3;
+      padding: 10px 20px;
+      border-radius: 6px;
+      border: 1px solid #4ecca3;
+      font-size: 13px;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+      z-index: 1000;
+    }
+
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+
+  <!-- Connect View -->
+  <div id="connect-view" class="view active">
+    <div class="connect-form">
+      <h2>Terminal Streamer</h2>
+      <div class="form-group">
+        <label>Host / IP</label>
+        <input id="inp-host" type="text" placeholder="192.168.1.100" />
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Port</label>
+          <input id="inp-port" type="number" value="8765" />
+        </div>
+        <div class="form-group">
+          <label>Protokoll</label>
+          <select id="inp-tls" style="width:100%;padding:8px 10px;border:1px solid #0f3460;border-radius:4px;background:#1a1a2e;color:#e0e0e0;font-size:14px;">
+            <option value="false">HTTP</option>
+            <option value="true">HTTPS</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>API Key</label>
+        <input id="inp-apikey" type="password" placeholder="API Key eingeben" />
+      </div>
+      <button onclick="doConnect()">Verbinden</button>
+    </div>
+  </div>
+
+  <!-- Sessions View -->
+  <div id="sessions-view" class="view">
+    <header>
+      <h1>Sessions</h1>
+      <div class="header-actions">
+        <div class="push-toggle">
+          <span class="indicator" id="push-indicator"></span>
+          <button id="btn-push" onclick="togglePush()">Push</button>
+        </div>
+        <button onclick="showView('connect-view')">Trennen</button>
+      </div>
+    </header>
+    <div style="padding:20px; flex:1; overflow-y:auto;">
+      <div class="sessions-header">
+        <h2 style="font-size:16px;">Aktive Sessions</h2>
+        <div style="display:flex; gap:6px;">
+          <button onclick="refreshSessions()">Aktualisieren</button>
+          <button onclick="createSession()">+ Neue Session</button>
+        </div>
+      </div>
+      <div id="session-list" class="session-list"></div>
+    </div>
+  </div>
+
+  <!-- Terminal View -->
+  <div id="terminal-view" class="view">
+    <header>
+      <h1 id="terminal-title">Terminal</h1>
+      <button onclick="disconnectTerminal()">Zurück</button>
+    </header>
+    <div id="terminal-container"></div>
+    <div class="quick-keys">
+      <button onclick="sendKey('\x03')">Ctrl+C</button>
+      <button onclick="sendKey('\x04')">Ctrl+D</button>
+      <button onclick="sendKey('\x1a')">Ctrl+Z</button>
+      <button onclick="sendKey('\t')">Tab</button>
+      <button onclick="sendKey('\x1b')">Esc</button>
+      <button onclick="sendKey('\x1bOP')">F1</button>
+      <button onclick="sendKey('\x1bOQ')">F2</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script>
+    // --- State ---
+    let serverConfig = { host: "", port: 8765, apiKey: "", useTls: false };
+    let currentWs = null;
+    let term = null;
+    let fitAddon = null;
+    let pushSubscription = null;
+    let swRegistration = null;
+
+    // --- Helpers ---
+    function httpBase() {
+      const proto = serverConfig.useTls ? "https" : "http";
+      return `${proto}://${serverConfig.host}:${serverConfig.port}`;
+    }
+
+    function wsBase() {
+      const proto = serverConfig.useTls ? "wss" : "ws";
+      return `${proto}://${serverConfig.host}:${serverConfig.port}`;
+    }
+
+    function apiHeaders() {
+      return { "Content-Type": "application/json", "X-API-Key": serverConfig.apiKey };
+    }
+
+    async function apiFetch(path, options = {}) {
+      options.headers = { ...apiHeaders(), ...(options.headers || {}) };
+      const res = await fetch(httpBase() + path, options);
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      return res.json();
+    }
+
+    function showView(id) {
+      document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
+      document.getElementById(id).classList.add("active");
+    }
+
+    function showToast(msg) {
+      const el = document.getElementById("toast");
+      el.textContent = msg;
+      el.classList.add("show");
+      setTimeout(() => el.classList.remove("show"), 3000);
+    }
+
+    // --- Persistence ---
+    function saveConfig() {
+      localStorage.setItem("ts-config", JSON.stringify(serverConfig));
+    }
+
+    function loadConfig() {
+      const s = localStorage.getItem("ts-config");
+      if (s) {
+        try { Object.assign(serverConfig, JSON.parse(s)); } catch {}
+      }
+    }
+
+    // --- Connect ---
+    async function doConnect() {
+      serverConfig.host = document.getElementById("inp-host").value.trim();
+      serverConfig.port = parseInt(document.getElementById("inp-port").value) || 8765;
+      serverConfig.apiKey = document.getElementById("inp-apikey").value.trim();
+      serverConfig.useTls = document.getElementById("inp-tls").value === "true";
+
+      if (!serverConfig.host || !serverConfig.apiKey) {
+        showToast("Host und API Key sind erforderlich");
+        return;
+      }
+
+      try {
+        await apiFetch("/api/sessions");
+        saveConfig();
+        showView("sessions-view");
+        refreshSessions();
+        registerServiceWorker();
+      } catch (e) {
+        showToast("Verbindung fehlgeschlagen: " + e.message);
+      }
+    }
+
+    // --- Sessions ---
+    async function refreshSessions() {
+      try {
+        const data = await apiFetch("/api/sessions");
+        renderSessions(data.sessions);
+      } catch (e) {
+        showToast("Fehler: " + e.message);
+      }
+    }
+
+    function renderSessions(sessions) {
+      const list = document.getElementById("session-list");
+      if (sessions.length === 0) {
+        list.innerHTML = '<p style="color:#888;text-align:center;padding:40px;">Keine Sessions vorhanden</p>';
+        return;
+      }
+      list.innerHTML = sessions
+        .map(
+          (s) => `
+        <div class="session-card" onclick="openTerminal('${s.id}', '${s.title || s.shell}')">
+          <div class="session-info">
+            <h3><span class="status-dot ${s.alive ? "alive" : "dead"}"></span>${s.title || s.shell}</h3>
+            <p>${s.shell} &middot; ${s.cols}x${s.rows} &middot; ${new Date(s.created_at * 1000).toLocaleTimeString()}</p>
+          </div>
+          <div class="session-actions">
+            <button class="btn-delete" onclick="event.stopPropagation(); deleteSession('${s.id}')">Löschen</button>
+          </div>
+        </div>
+      `
+        )
+        .join("");
+    }
+
+    async function createSession() {
+      try {
+        await apiFetch("/api/sessions", { method: "POST", body: JSON.stringify({}) });
+        refreshSessions();
+      } catch (e) {
+        showToast("Fehler: " + e.message);
+      }
+    }
+
+    async function deleteSession(id) {
+      try {
+        await apiFetch(`/api/sessions/${id}`, { method: "DELETE" });
+        refreshSessions();
+      } catch (e) {
+        showToast("Fehler: " + e.message);
+      }
+    }
+
+    // --- Terminal ---
+    function openTerminal(sessionId, title) {
+      showView("terminal-view");
+      document.getElementById("terminal-title").textContent = title;
+
+      const container = document.getElementById("terminal-container");
+      container.innerHTML = "";
+
+      term = new Terminal({
+        cursorBlink: true,
+        fontSize: 14,
+        fontFamily: "'Fira Code', 'Cascadia Code', 'Menlo', monospace",
+        theme: {
+          background: "#000000",
+          foreground: "#e0e0e0",
+          cursor: "#4ecca3",
+        },
+        scrollback: 10000,
+      });
+
+      fitAddon = new FitAddon.FitAddon();
+      term.loadAddon(fitAddon);
+      term.open(container);
+
+      setTimeout(() => {
+        fitAddon.fit();
+      }, 50);
+
+      // WebSocket
+      const wsUrl = `${wsBase()}/ws/terminal/${sessionId}?api_key=${encodeURIComponent(serverConfig.apiKey)}`;
+      currentWs = new WebSocket(wsUrl);
+
+      currentWs.onopen = () => {
+        const dims = fitAddon.proposeDimensions();
+        if (dims) {
+          currentWs.send(JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }));
+        }
+      };
+
+      currentWs.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "output") {
+          const bytes = Uint8Array.from(atob(msg.data), (c) => c.charCodeAt(0));
+          term.write(bytes);
+        } else if (msg.type === "exit") {
+          term.write("\r\n\x1b[33m--- Session beendet ---\x1b[0m\r\n");
+          currentWs = null;
+        }
+      };
+
+      currentWs.onclose = () => {
+        term.write("\r\n\x1b[31m--- Verbindung getrennt ---\x1b[0m\r\n");
+        currentWs = null;
+      };
+
+      term.onData((data) => {
+        if (currentWs && currentWs.readyState === WebSocket.OPEN) {
+          currentWs.send(JSON.stringify({ type: "input", data: data }));
+        }
+      });
+
+      // Resize handling
+      const resizeObserver = new ResizeObserver(() => {
+        if (fitAddon && term) {
+          fitAddon.fit();
+          if (currentWs && currentWs.readyState === WebSocket.OPEN) {
+            currentWs.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+          }
+        }
+      });
+      resizeObserver.observe(container);
+    }
+
+    function sendKey(key) {
+      if (currentWs && currentWs.readyState === WebSocket.OPEN) {
+        currentWs.send(JSON.stringify({ type: "input", data: key }));
+      }
+      if (term) term.focus();
+    }
+
+    function disconnectTerminal() {
+      if (currentWs) {
+        currentWs.close();
+        currentWs = null;
+      }
+      if (term) {
+        term.dispose();
+        term = null;
+      }
+      showView("sessions-view");
+      refreshSessions();
+    }
+
+    // --- Service Worker & Push ---
+    async function registerServiceWorker() {
+      if (!("serviceWorker" in navigator)) return;
+
+      try {
+        swRegistration = await navigator.serviceWorker.register("sw.js", { scope: "/web/" });
+        await navigator.serviceWorker.ready;
+        updatePushUI();
+      } catch (e) {
+        console.warn("SW registration failed:", e);
+      }
+    }
+
+    async function togglePush() {
+      if (!swRegistration) {
+        showToast("Service Worker nicht verfügbar");
+        return;
+      }
+
+      if (pushSubscription) {
+        // Unsubscribe
+        try {
+          await apiFetch("/api/push/unsubscribe", {
+            method: "POST",
+            body: JSON.stringify({ subscription: pushSubscription.toJSON() }),
+          });
+          await pushSubscription.unsubscribe();
+          pushSubscription = null;
+          showToast("Push-Benachrichtigungen deaktiviert");
+        } catch (e) {
+          showToast("Fehler beim Deaktivieren: " + e.message);
+        }
+      } else {
+        // Subscribe
+        try {
+          const permission = await Notification.requestPermission();
+          if (permission !== "granted") {
+            showToast("Benachrichtigungs-Berechtigung verweigert");
+            return;
+          }
+
+          const vapidResp = await apiFetch("/api/push/vapid-public-key");
+          const applicationServerKey = urlBase64ToUint8Array(vapidResp.publicKey);
+
+          pushSubscription = await swRegistration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: applicationServerKey,
+          });
+
+          await apiFetch("/api/push/subscribe", {
+            method: "POST",
+            body: JSON.stringify({ subscription: pushSubscription.toJSON() }),
+          });
+
+          showToast("Push-Benachrichtigungen aktiviert");
+        } catch (e) {
+          showToast("Fehler beim Aktivieren: " + e.message);
+        }
+      }
+      updatePushUI();
+    }
+
+    function updatePushUI() {
+      const indicator = document.getElementById("push-indicator");
+      const btn = document.getElementById("btn-push");
+
+      if (swRegistration) {
+        swRegistration.pushManager.getSubscription().then((sub) => {
+          pushSubscription = sub;
+          if (sub) {
+            indicator.classList.add("active");
+            btn.classList.add("active");
+            btn.textContent = "Push An";
+          } else {
+            indicator.classList.remove("active");
+            btn.classList.remove("active");
+            btn.textContent = "Push Aus";
+          }
+        });
+      }
+    }
+
+    function urlBase64ToUint8Array(base64String) {
+      const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+      const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+      const raw = atob(base64);
+      const arr = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+      return arr;
+    }
+
+    // --- Init ---
+    window.addEventListener("DOMContentLoaded", () => {
+      loadConfig();
+      if (serverConfig.host) {
+        document.getElementById("inp-host").value = serverConfig.host;
+        document.getElementById("inp-port").value = serverConfig.port;
+        document.getElementById("inp-apikey").value = serverConfig.apiKey;
+        document.getElementById("inp-tls").value = serverConfig.useTls ? "true" : "false";
+      }
+    });
+  </script>
+</body>
+</html>

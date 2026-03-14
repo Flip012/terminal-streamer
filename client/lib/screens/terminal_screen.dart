@@ -3,7 +3,6 @@ import 'package:xterm/xterm.dart';
 import '../models/server_config.dart';
 import '../models/terminal_session.dart';
 import '../services/terminal_service.dart';
-import '../services/notification_service.dart';
 
 class TerminalScreen extends StatefulWidget {
   final ServerConfig config;
@@ -19,18 +18,15 @@ class TerminalScreen extends StatefulWidget {
   State<TerminalScreen> createState() => _TerminalScreenState();
 }
 
-class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObserver {
+class _TerminalScreenState extends State<TerminalScreen> {
   late final Terminal _terminal;
   late final TerminalService _terminalService;
   final _terminalController = TerminalController();
   final _focusNode = FocusNode();
-  bool _isInForeground = true;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    NotificationService.instance.requestPermission();
 
     _terminal = Terminal(
       maxLines: 10000,
@@ -41,28 +37,13 @@ class _TerminalScreenState extends State<TerminalScreen> with WidgetsBindingObse
       config: widget.config,
       sessionId: widget.session.id,
       terminal: _terminal,
-      onInputRequired: _onInputRequired,
+      sessionTitle: widget.session.title,
     );
     _terminalService.connect();
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    _isInForeground = state == AppLifecycleState.resumed;
-  }
-
-  void _onInputRequired(String prompt) {
-    if (!_isInForeground) {
-      NotificationService.instance.show(
-        title: 'Terminal: ${widget.session.title}',
-        body: prompt,
-      );
-    }
-  }
-
-  @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _terminalService.dispose();
     _terminalController.dispose();
     _focusNode.dispose();

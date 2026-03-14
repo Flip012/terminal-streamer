@@ -1,49 +1,42 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/widgets.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:xterm/xterm.dart';
 import '../models/server_config.dart';
+import 'question_detector.dart';
+import 'notification_service.dart';
 
-/// Callback when the terminal output suggests user input is needed.
-typedef InputRequiredCallback = void Function(String prompt);
-
-class TerminalService {
+class TerminalService with WidgetsBindingObserver {
   final ServerConfig config;
   final String sessionId;
+  final String sessionTitle;
   final Terminal terminal;
-  final InputRequiredCallback? onInputRequired;
 
   WebSocketChannel? _channel;
   StreamSubscription? _subscription;
   bool _disposed = false;
 
-  /// Buffer of recent output lines to detect input prompts.
-  final _recentOutput = StringBuffer();
-  Timer? _promptDetectionTimer;
-
-  /// Patterns that indicate the LLM is waiting for user input.
-  static final _promptPatterns = [
-    RegExp(r'\?\s*$'),                           // ends with ?
-    RegExp(r'\(y/n\)\s*:?\s*$', caseSensitive: false),
-    RegExp(r'\[Y/n\]\s*:?\s*$'),
-    RegExp(r'\[y/N\]\s*:?\s*$'),
-    RegExp(r'>\s*$'),                            // prompt ending with >
-    RegExp(r':\s*$'),                            // prompt ending with :
-    RegExp(r'Enter .+:\s*$', caseSensitive: false),
-    RegExp(r'Press .+ to continue', caseSensitive: false),
-    RegExp(r'Do you want to', caseSensitive: false),
-    RegExp(r'Would you like to', caseSensitive: false),
-    RegExp(r'Please (confirm|enter|provide|select|choose)', caseSensitive: false),
-  ];
+  final _questionDetector = QuestionDetector();
+  Timer? _questionCheckTimer;
+  bool _appInBackground = false;
 
   TerminalService({
     required this.config,
     required this.sessionId,
     required this.terminal,
-    this.onInputRequired,
+    this.sessionTitle = 'Terminal',
   });
 
   void connect() {
+    WidgetsBinding.instance.addObserver(this);
+
+    // Periodically check for questions (every 500ms)
+    _questionCheckTimer = Timer.periodic(
+      const Duration(milliseconds: 500),
+      (_) => _checkForQuestion(),
+    );
+
     final uri = Uri.parse(
       '${config.wsBaseUrl}/ws/terminal/$sessionId?api_key=${Uri.encodeComponent(config.apiKey)}',
     );
@@ -86,51 +79,13 @@ class TerminalService {
         final bytes = base64Decode(data['data'] as String);
         final text = utf8.decode(bytes, allowMalformed: true);
         terminal.write(text);
-        _detectPrompt(text);
+        _questionDetector.onOutput(text);
       } else if (type == 'exit') {
         terminal.write('\r\n[Session ended]\r\n');
       }
     } catch (e) {
       // Ignore malformed messages
     }
-  }
-
-  /// Strip ANSI escape sequences from text for pattern matching.
-  static String _stripAnsi(String text) {
-    return text.replaceAll(RegExp(r'\x1B\[[0-9;]*[a-zA-Z]'), '');
-  }
-
-  void _detectPrompt(String newOutput) {
-    if (onInputRequired == null) return;
-
-    _recentOutput.write(newOutput);
-
-    // Keep only the last 500 chars to avoid unbounded growth
-    if (_recentOutput.length > 500) {
-      final s = _recentOutput.toString();
-      _recentOutput.clear();
-      _recentOutput.write(s.substring(s.length - 500));
-    }
-
-    // Debounce: wait 800ms after last output before checking.
-    // This avoids false positives during rapid output streaming.
-    _promptDetectionTimer?.cancel();
-    _promptDetectionTimer = Timer(const Duration(milliseconds: 800), () {
-      final clean = _stripAnsi(_recentOutput.toString());
-      // Check last line(s) of output
-      final lastLine = clean.split('\n').last.trim();
-      if (lastLine.isEmpty) return;
-
-      for (final pattern in _promptPatterns) {
-        if (pattern.hasMatch(lastLine)) {
-          onInputRequired!(lastLine.length > 120
-              ? '${lastLine.substring(0, 120)}...'
-              : lastLine);
-          _recentOutput.clear();
-          break;
-        }
-      }
-    });
   }
 
   void _onError(dynamic error) {
@@ -145,9 +100,35 @@ class TerminalService {
     }
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appInBackground = state != AppLifecycleState.resumed;
+    if (!_appInBackground) {
+      // App came to foreground — cancel any pending notification
+      NotificationService.instance.cancelNotification(sessionId.hashCode);
+    }
+  }
+
+  void _checkForQuestion() {
+    if (_disposed) return;
+    // Only notify when app is in background
+    if (!_appInBackground) return;
+
+    final question = _questionDetector.checkForQuestion();
+    if (question != null) {
+      NotificationService.instance.showQuestionNotification(
+        sessionTitle: sessionTitle,
+        questionText: question.length > 150 ? '${question.substring(0, 147)}...' : question,
+        sessionHash: sessionId.hashCode,
+      );
+    }
+  }
+
   void dispose() {
     _disposed = true;
-    _promptDetectionTimer?.cancel();
+    _questionCheckTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _questionDetector.reset();
     _subscription?.cancel();
     _channel?.sink.close();
   }

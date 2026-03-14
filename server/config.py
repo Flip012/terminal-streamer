@@ -10,6 +10,9 @@ DEFAULT_CONFIG = {
     "port": 8765,
     "api_key": "",
     "default_shell": "",  # empty = auto-detect
+    "vapid_private_key": "",
+    "vapid_public_key": "",
+    "vapid_contact": "mailto:admin@terminal-streamer.local",
 }
 
 
@@ -20,6 +23,13 @@ def load_config() -> dict:
             config.update(json.load(f))
     if not config["api_key"]:
         config["api_key"] = secrets.token_urlsafe(32)
+        save_config(config)
+    if not config["vapid_private_key"]:
+        from py_vapid import Vapid
+        vapid = Vapid()
+        vapid.generate_keys()
+        config["vapid_private_key"] = vapid.private_pem().decode("utf-8")
+        config["vapid_public_key"] = vapid.public_key_urlsafe_base64()
         save_config(config)
     return config
 

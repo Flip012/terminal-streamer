@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /c/git/terminal-streamer/client && flutter build web 2>&1)",
+      "Bash(where flutter:*)",
+      "Read(//c/tools/flutter/bin/**)",
+      "Bash(/c/tools/flutter/bin/flutter build:*)",
+      "Bash(cd C:/git/terminal-streamer/client && /c/tools/flutter/bin/flutter pub outdated 2>&1)",
+      "Bash(cd C:/git/terminal-streamer/client && /c/tools/flutter/bin/flutter pub get 2>&1)",
+      "Bash(python -c \"import winpty; help\\(winpty.PtyProcess.spawn\\)\" 2>&1 | head -30)",
+      "Bash(cd C:/git/terminal-streamer/client && /c/tools/flutter/bin/flutter pub add web 2>&1)",
+      "Bash(cd C:/git/terminal-streamer/client && /c/tools/flutter/bin/flutter create --platforms android . 2>&1)",
+      "Bash(export ANDROID_HOME=\"C:/tools/android\" && cd C:/git/terminal-streamer/client && /c/tools/flutter/bin/flutter build apk 2>&1)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git pull:*)",
+      "Bash(git merge:*)"
+    ]
+  }
+}
