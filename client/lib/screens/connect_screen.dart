@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/server_config.dart';
+import '../services/api_service.dart';
 import '../services/config_storage.dart';
 import 'sessions_screen.dart';
 
@@ -57,6 +58,10 @@ class _ConnectScreenState extends State<ConnectScreen> {
     setState(() => _loading = true);
 
     try {
+      // Actually test the connection before navigating
+      final api = ApiService(config);
+      await api.testConnection();
+
       await ConfigStorage.save(config);
       if (mounted) {
         Navigator.of(context).pushReplacement(
