@@ -470,14 +470,11 @@ class TerminalManager:
                 # Restore Claude Code resume ID
                 session._claude_resume_id = entry.get("claude_resume_id")
 
-                # Inject restoration marker
+                # Restoration marker — only in history, not in pyte
+                # (feeding it into pyte would shift the cursor position)
                 marker = b"\r\n\x1b[33m--- Session restored ---\x1b[0m\r\n"
                 if session._claude_resume_id:
                     marker += f"\x1b[33mAuto-resuming Claude Code session {session._claude_resume_id[:8]}...\x1b[0m\r\n".encode()
-                try:
-                    session._pyte_stream.feed(marker)
-                except Exception:
-                    pass
                 session._output_history += marker
 
                 # Start a fresh PTY process
