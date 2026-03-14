@@ -241,7 +241,8 @@ async def push_unsubscribe(req: PushSubscriptionRequest):
 def _send_push_sync(title: str, body: str, tag: str):
     """Send push notification to all subscribed clients (runs in thread)."""
     dead_endpoints = []
-    for endpoint, sub_info in push_subscriptions.items():
+    # Snapshot to avoid RuntimeError from concurrent dict mutation
+    for endpoint, sub_info in list(push_subscriptions.items()):
         try:
             webpush(
                 subscription_info=sub_info,

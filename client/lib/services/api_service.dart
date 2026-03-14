@@ -156,7 +156,7 @@ class ApiService {
       }
     }
     // Should not reach here, but just in case
-    throw ApiException('$action fehlgeschlagen nach $_maxRetries Versuchen.');
+    throw ApiException('$action fehlgeschlagen nach ${_maxRetries + 1} Versuchen.');
   }
 
   Future<void> _retryDelay(int attempt) async {

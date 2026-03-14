@@ -181,18 +181,25 @@ class TerminalManager:
                 else:
                     # Wait until fd is readable, then read (avoids busy-polling)
                     readable = loop.create_future()
+                    fd = session._master_fd
 
                     def _on_readable():
                         if not readable.done():
                             readable.set_result(True)
-                        loop.remove_reader(session._master_fd)
+                        try:
+                            loop.remove_reader(fd)
+                        except (ValueError, OSError):
+                            pass
 
                     try:
-                        loop.add_reader(session._master_fd, _on_readable)
+                        loop.add_reader(fd, _on_readable)
                         await readable
-                        data = await self._read_from_pty(session)
-                    except (ValueError, OSError):
-                        # fd closed
+                        if not session._alive:
+                            data = None
+                        else:
+                            data = await self._read_from_pty(session)
+                    except (ValueError, OSError, asyncio.CancelledError):
+                        # fd closed or task cancelled
                         data = None
 
                 if data is None:
@@ -383,17 +390,24 @@ class TerminalManager:
                 if session._process and session._process.isalive():
                     session._process.terminate()
             else:
-                # Signal first, then close fd
+                # Signal first, remove reader, then close fd
                 if session._pid is not None:
                     try:
                         os.kill(session._pid, signal.SIGTERM)
                     except (ProcessLookupError, ChildProcessError, OSError):
                         pass
                 if session._master_fd is not None:
+                    # Remove event loop reader before closing to prevent
+                    # stale/recycled fd references
+                    try:
+                        asyncio.get_event_loop().remove_reader(session._master_fd)
+                    except (ValueError, RuntimeError):
+                        pass
                     try:
                         os.close(session._master_fd)
                     except OSError:
                         pass
+                    session._master_fd = None
                 if session._pid is not None:
                     try:
                         os.waitpid(session._pid, os.WNOHANG)
