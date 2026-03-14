@@ -88,9 +88,34 @@ def detect_question(raw_text: str) -> Optional[str]:
         if line.endswith("?") and len(line) > 10:
             return line
 
-    # y/n prompts
+    # y/n, yes/no, j/n (German) prompts
     for line in reversed(tail[-3:]):
-        if re.search(r"\(y/n\)|\(Y/n\)|\(y/N\)|\[y/N\]|\[Y/n\]", line, re.IGNORECASE):
+        if re.search(
+            r"\(y/n\)|\(Y/n\)|\(y/N\)|\[y/N\]|\[Y/n\]"
+            r"|\(yes/no\)|\(Yes/No\)"
+            r"|\(j/n\)|\(J/n\)|\(j/N\)|\[j/N\]|\[J/n\]",
+            line,
+            re.IGNORECASE,
+        ):
+            return line
+
+    # "Press Enter/key to continue" prompts
+    for line in reversed(tail[-3:]):
+        if re.search(
+            r"Press .+ to continue|Drücke .+ um fortzufahren"
+            r"|Press Enter|Hit Enter",
+            line,
+            re.IGNORECASE,
+        ):
+            return line
+
+    # "Enter/Provide X:" or "Confirm X:" input prompts (line ends with :)
+    for line in reversed(tail[-3:]):
+        if re.search(
+            r"^(Enter|Provide|Confirm|Select|Choose|Eingabe|Bitte)\b.+:\s*$",
+            line,
+            re.IGNORECASE,
+        ):
             return line
 
     return None
