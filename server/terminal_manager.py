@@ -91,7 +91,13 @@ class TerminalManager:
                     # Update history
                     session._output_history += data
                     if len(session._output_history) > session._history_limit:
-                        session._output_history = session._output_history[-session._history_limit:]
+                        trimmed = session._output_history[-session._history_limit:]
+                        # Avoid splitting multi-byte UTF-8 characters at the boundary
+                        # Skip leading continuation bytes (10xxxxxx)
+                        i = 0
+                        while i < len(trimmed) and (trimmed[i] & 0xC0) == 0x80:
+                            i += 1
+                        session._output_history = trimmed[i:]
                     
                     # Broadcast to subscribers
                     for queue in session._subscribers:

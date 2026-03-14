@@ -38,7 +38,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
       terminal: _terminal,
       sessionTitle: widget.session.title,
     );
-    _terminalService.connect();
+
+    // Connect after the first frame so TerminalView has been laid out
+    // and onResize fires before history data arrives.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _terminalService.connect();
+    });
   }
 
   @override
