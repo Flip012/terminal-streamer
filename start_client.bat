@@ -16,11 +16,7 @@ call flutter --version
 echo.
 
 echo [2/3] Installiere Abhaengigkeiten...
-call flutter pub get || (
-    echo FEHLER: Flutter-Abhaengigkeiten konnten nicht installiert werden.
-    pause
-    exit /b 1
-)
+call flutter pub get
 echo.
 
 echo [3/3] Baue und starte App...
