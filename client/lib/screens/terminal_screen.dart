@@ -97,10 +97,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
   Widget build(BuildContext context) {
     const terminalStyle = TerminalStyle(
       fontSize: 14,
-      fontFamily: 'Courier New',
+      fontFamily: 'JetBrainsMono',
       fontFamilyFallback: [
+        'Courier New',
         'Consolas',
-        'Liberation Mono',
         'monospace',
       ],
     );

@@ -282,21 +282,23 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
                 pass
             return
 
-        queue, history = subscription
+        queue, raw_history = subscription
         state = {
-            "buffer": history.decode("utf-8", errors="replace")[-OUTPUT_BUFFER_MAX:] if history else "",
+            "buffer": raw_history.decode("utf-8", errors="replace")[-OUTPUT_BUFFER_MAX:] if raw_history else "",
             "last_output_time": time.time(),
             "notified": False,
         }
 
         try:
-            # Send history after resize so the client has correct dimensions.
-            # Prepend a screen clear so old content doesn't mix with new rendering.
-            if history:
+            # Send current screen content via pyte virtual terminal.
+            # Unlike raw history replay, this produces clean ANSI output
+            # that renders correctly at any terminal size.
+            snapshot = manager.get_screen_snapshot(session_id)
+            if snapshot:
                 clear = b"\x1b[H\x1b[2J"
                 await websocket.send_json({
                     "type": "output",
-                    "data": base64.b64encode(clear + history).decode("ascii"),
+                    "data": base64.b64encode(clear + snapshot).decode("ascii"),
                 })
             while True:
                 try:

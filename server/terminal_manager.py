@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+import pyte
+
 if sys.platform == "win32":
     import winpty
 else:
@@ -14,6 +16,78 @@ else:
     import struct
     import termios
     import signal
+
+
+# ANSI color name → SGR foreground code
+_FG_COLORS = {
+    "black": "30", "red": "31", "green": "32", "brown": "33",
+    "blue": "34", "magenta": "35", "cyan": "36", "white": "37",
+    "default": None,
+}
+_BG_COLORS = {
+    "black": "40", "red": "41", "green": "42", "brown": "43",
+    "blue": "44", "magenta": "45", "cyan": "46", "white": "47",
+    "default": None,
+}
+
+
+def _screen_to_ansi(screen: pyte.Screen) -> bytes:
+    """Convert pyte screen buffer to ANSI-escaped bytes for the client."""
+    lines = []
+    for y in range(screen.lines):
+        parts = []
+        prev_attrs = None
+        for x in range(screen.columns):
+            char = screen.buffer[y][x]
+            attrs = (char.fg, char.bg, char.bold, char.underscore, char.reverse)
+            if attrs != prev_attrs:
+                codes = ["0"]  # reset
+                if char.bold:
+                    codes.append("1")
+                if char.underscore:
+                    codes.append("4")
+                if char.reverse:
+                    codes.append("7")
+                fg = char.fg
+                if fg and fg != "default":
+                    if fg in _FG_COLORS and _FG_COLORS[fg]:
+                        codes.append(_FG_COLORS[fg])
+                    elif isinstance(fg, str) and len(fg) == 6:
+                        # 24-bit color hex
+                        try:
+                            r, g, b = int(fg[0:2], 16), int(fg[2:4], 16), int(fg[4:6], 16)
+                            codes.append(f"38;2;{r};{g};{b}")
+                        except ValueError:
+                            pass
+                bg = char.bg
+                if bg and bg != "default":
+                    if bg in _BG_COLORS and _BG_COLORS[bg]:
+                        codes.append(_BG_COLORS[bg])
+                    elif isinstance(bg, str) and len(bg) == 6:
+                        try:
+                            r, g, b = int(bg[0:2], 16), int(bg[2:4], 16), int(bg[4:6], 16)
+                            codes.append(f"48;2;{r};{g};{b}")
+                        except ValueError:
+                            pass
+                parts.append(f"\x1b[{';'.join(codes)}m")
+                prev_attrs = attrs
+            parts.append(char.data)
+        # Strip trailing whitespace but keep the line
+        line = "".join(parts).rstrip()
+        lines.append(line)
+
+    # Remove trailing empty lines
+    while lines and not lines[-1].strip() and not lines[-1]:
+        lines.pop()
+
+    result = "\r\n".join(lines) + "\x1b[0m"
+
+    # Add cursor position
+    cursor_y = screen.cursor.y + 1
+    cursor_x = screen.cursor.x + 1
+    result += f"\x1b[{cursor_y};{cursor_x}H"
+
+    return result.encode("utf-8")
 
 
 @dataclass
@@ -32,6 +106,8 @@ class TerminalSession:
     _subscribers: list[asyncio.Queue] = field(default_factory=list, repr=False)
     _reader_task: Optional[asyncio.Task] = field(default=None, repr=False)
     _history_limit: int = 100 * 1024  # 100 KB history
+    _pyte_screen: object = field(default=None, repr=False)
+    _pyte_stream: object = field(default=None, repr=False)
 
     def to_dict(self) -> dict:
         return {
@@ -62,16 +138,20 @@ class TerminalManager:
             title=title,
         )
 
+        # Virtual terminal for tracking screen state
+        session._pyte_screen = pyte.Screen(cols, rows)
+        session._pyte_stream = pyte.ByteStream(session._pyte_screen)
+
         if sys.platform == "win32":
             self._start_winpty(session)
         else:
             self._start_unix_pty(session)
 
         self.sessions[session_id] = session
-        
+
         # Start background reader
         session._reader_task = asyncio.create_task(self._read_loop(session_id))
-        
+
         return session
 
     async def _read_loop(self, session_id: str):
@@ -86,19 +166,23 @@ class TerminalManager:
                 if data is None:
                     session._alive = False
                     break
-                
+
                 if data:
-                    # Update history
+                    # Update raw history for question detection
                     session._output_history += data
                     if len(session._output_history) > session._history_limit:
                         trimmed = session._output_history[-session._history_limit:]
-                        # Avoid splitting multi-byte UTF-8 characters at the boundary
-                        # Skip leading continuation bytes (10xxxxxx)
                         i = 0
                         while i < len(trimmed) and (trimmed[i] & 0xC0) == 0x80:
                             i += 1
                         session._output_history = trimmed[i:]
-                    
+
+                    # Feed into pyte virtual terminal
+                    try:
+                        session._pyte_stream.feed(data)
+                    except Exception:
+                        pass
+
                     # Broadcast to subscribers
                     for queue in session._subscribers:
                         await queue.put(data)
@@ -107,7 +191,7 @@ class TerminalManager:
             except Exception:
                 session._alive = False
                 break
-        
+
         # Notify all subscribers that session ended
         for queue in session._subscribers:
             await queue.put(None)
@@ -135,12 +219,22 @@ class TerminalManager:
         except Exception:
             return None
 
+    def get_screen_snapshot(self, session_id: str) -> Optional[bytes]:
+        """Get the current screen content as ANSI-formatted bytes via pyte."""
+        session = self.sessions.get(session_id)
+        if not session or not session._pyte_screen:
+            return None
+        try:
+            return _screen_to_ansi(session._pyte_screen)
+        except Exception:
+            return None
+
     def subscribe(self, session_id: str) -> Optional[tuple[asyncio.Queue, bytes]]:
-        """Subscribe to terminal output. Returns (queue, history)."""
+        """Subscribe to terminal output. Returns (queue, raw_history)."""
         session = self.sessions.get(session_id)
         if not session or not session._alive:
             return None
-        
+
         queue = asyncio.Queue()
         session._subscribers.append(queue)
         return queue, session._output_history
@@ -202,6 +296,10 @@ class TerminalManager:
         session.cols = cols
         session.rows = rows
 
+        # Resize pyte virtual terminal
+        if session._pyte_screen:
+            session._pyte_screen.resize(rows, cols)
+
         try:
             if sys.platform == "win32":
                 session._process.setwinsize(rows, cols)
@@ -222,7 +320,7 @@ class TerminalManager:
         session._alive = False
         if session._reader_task:
             session._reader_task.cancel()
-        
+
         try:
             if sys.platform == "win32":
                 if session._process and session._process.isalive():
