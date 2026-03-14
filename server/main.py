@@ -265,8 +265,10 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
 
     async def read_terminal():
         """Read terminal output and send to client."""
-        # Wait for the client to report its actual terminal dimensions
-        # so history and new output render correctly.
+        # Wait for the client to report its actual terminal dimensions.
+        # The resize triggers a PTY redraw (SIGWINCH / setwinsize) which
+        # sends fresh output through the queue — no need to replay raw
+        # history that was rendered for a different terminal size.
         try:
             await asyncio.wait_for(initial_resize.wait(), timeout=5.0)
         except asyncio.TimeoutError:
@@ -280,23 +282,14 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
                 pass
             return
 
-        queue, history = subscription
-        state = {"buffer": "", "last_output_time": time.time(), "notified": False}
+        queue, _history = subscription
+        state = {
+            "buffer": _history.decode("utf-8", errors="replace")[-OUTPUT_BUFFER_MAX:] if _history else "",
+            "last_output_time": time.time(),
+            "notified": False,
+        }
 
         try:
-            if history:
-                # Prepend terminal reset so the client starts in a clean state:
-                # \x1bc = full reset, \x1b[H = cursor home, \x1b[2J = clear screen
-                reset = b"\x1bc\x1b[H\x1b[2J"
-                combined = reset + history
-                await websocket.send_json({
-                    "type": "output",
-                    "data": base64.b64encode(combined).decode("ascii"),
-                })
-                # Buffer history for question detection
-                text = history.decode("utf-8", errors="replace")
-                state["buffer"] = text[-OUTPUT_BUFFER_MAX:]
-
             while True:
                 try:
                     data = await asyncio.wait_for(queue.get(), timeout=0.5)
@@ -360,8 +353,8 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
                 elif msg_type == "resize":
                     cols = message.get("cols", 120)
                     rows = message.get("rows", 30)
-                    initial_resize.set()
                     manager.resize(session_id, cols, rows)
+                    initial_resize.set()
         except WebSocketDisconnect:
             pass
 
