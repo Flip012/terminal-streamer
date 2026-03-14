@@ -22,6 +22,17 @@ from terminal_manager import TerminalManager
 
 config = load_config()
 manager = TerminalManager()
+SESSIONS_FILE = Path(__file__).parent / "sessions.json"
+
+
+async def periodic_save():
+    """Save sessions to disk every 30 seconds for crash recovery."""
+    while True:
+        await asyncio.sleep(30)
+        try:
+            manager.save_sessions(SESSIONS_FILE)
+        except Exception:
+            pass
 
 
 @asynccontextmanager
@@ -31,8 +42,19 @@ async def lifespan(app: FastAPI):
     print(f"  Host: {config['host']}:{config['port']}")
     print(f"  API Key: {config['api_key']}")
     print(f"  Default Shell: {get_default_shell()}")
+
+    # Restore sessions from previous run
+    manager.restore_sessions(SESSIONS_FILE)
+    if manager.sessions:
+        print(f"  Restored: {len(manager.sessions)} session(s)")
+
     print(f"{'='*50}\n")
+
+    save_task = asyncio.create_task(periodic_save())
     yield
+
+    save_task.cancel()
+    manager.save_sessions(SESSIONS_FILE)
     manager.destroy_all()
 
 
@@ -171,12 +193,14 @@ async def create_session(req: CreateSessionRequest):
     session = manager.create_session(
         shell=shell, cols=req.cols, rows=req.rows, title=req.title
     )
+    manager.save_sessions(SESSIONS_FILE)
     return {"session": session.to_dict()}
 
 
 @app.delete("/api/sessions/{session_id}", dependencies=[Depends(verify_api_key)])
 async def delete_session(session_id: str):
     if manager.destroy_session(session_id):
+        manager.save_sessions(SESSIONS_FILE)
         return {"status": "ok"}
     raise HTTPException(status_code=404, detail="Session not found")
 

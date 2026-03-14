@@ -1,9 +1,12 @@
 import asyncio
+import base64
+import json
 import os
 import sys
 import uuid
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 import pyte
@@ -108,6 +111,7 @@ class TerminalSession:
     _history_limit: int = 100 * 1024  # 100 KB history
     _pyte_screen: object = field(default=None, repr=False)
     _pyte_stream: object = field(default=None, repr=False)
+    _restored: bool = field(default=False, repr=False)
 
     def to_dict(self) -> dict:
         return {
@@ -118,6 +122,7 @@ class TerminalSession:
             "rows": self.rows,
             "title": self.title or self.shell,
             "alive": self._alive,
+            "restored": self._restored,
         }
 
 
@@ -354,3 +359,110 @@ class TerminalManager:
     def destroy_all(self):
         for session_id in list(self.sessions.keys()):
             self.destroy_session(session_id)
+
+    def save_sessions(self, filepath: Path):
+        """Save all active sessions to disk for persistence across restarts."""
+        sessions_data = []
+        for session in self.sessions.values():
+            if not session._alive:
+                continue
+            snapshot = b""
+            if session._pyte_screen:
+                try:
+                    snapshot = _screen_to_ansi(session._pyte_screen)
+                except Exception:
+                    pass
+            sessions_data.append({
+                "id": session.id,
+                "shell": session.shell,
+                "title": session.title,
+                "cols": session.cols,
+                "rows": session.rows,
+                "created_at": session.created_at,
+                "screen_snapshot_b64": base64.b64encode(snapshot).decode("ascii"),
+                "output_history_b64": base64.b64encode(session._output_history).decode("ascii"),
+            })
+
+        data = {
+            "version": 1,
+            "saved_at": time.time(),
+            "sessions": sessions_data,
+        }
+
+        # Atomic write: write to temp file, then rename
+        tmp = filepath.with_suffix(".tmp")
+        try:
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=2)
+            tmp.replace(filepath)
+        except Exception as e:
+            print(f"Warning: Failed to save sessions: {e}")
+
+    def restore_sessions(self, filepath: Path):
+        """Restore sessions from disk, creating new PTY processes."""
+        if not filepath.exists():
+            return
+
+        try:
+            with open(filepath, "r") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"Warning: Failed to read sessions file: {e}")
+            return
+
+        # Delete file after reading to avoid re-restoring on next crash
+        try:
+            filepath.unlink()
+        except OSError:
+            pass
+
+        for entry in data.get("sessions", []):
+            try:
+                session = TerminalSession(
+                    id=entry["id"],
+                    shell=entry["shell"],
+                    created_at=entry.get("created_at", time.time()),
+                    cols=entry.get("cols", 120),
+                    rows=entry.get("rows", 30),
+                    title=entry.get("title", ""),
+                    _restored=True,
+                )
+
+                # Restore pyte screen state
+                session._pyte_screen = pyte.Screen(session.cols, session.rows)
+                session._pyte_stream = pyte.ByteStream(session._pyte_screen)
+                snapshot_b64 = entry.get("screen_snapshot_b64", "")
+                if snapshot_b64:
+                    try:
+                        snapshot = base64.b64decode(snapshot_b64)
+                        session._pyte_stream.feed(snapshot)
+                    except Exception:
+                        pass
+
+                # Restore output history for question detection
+                history_b64 = entry.get("output_history_b64", "")
+                if history_b64:
+                    try:
+                        session._output_history = base64.b64decode(history_b64)
+                    except Exception:
+                        pass
+
+                # Inject restoration marker
+                marker = b"\r\n\x1b[33m--- Session restored (new shell) ---\x1b[0m\r\n"
+                try:
+                    session._pyte_stream.feed(marker)
+                except Exception:
+                    pass
+                session._output_history += marker
+
+                # Start a fresh PTY process
+                if sys.platform == "win32":
+                    self._start_winpty(session)
+                else:
+                    self._start_unix_pty(session)
+
+                self.sessions[session.id] = session
+                session._reader_task = asyncio.create_task(self._read_loop(session.id))
+
+            except Exception as e:
+                print(f"Warning: Failed to restore session {entry.get('id', '?')}: {e}")
