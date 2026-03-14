@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:xterm/xterm.dart';
 import '../models/server_config.dart';
 import '../models/terminal_session.dart';
@@ -47,7 +48,32 @@ class _TerminalScreenState extends State<TerminalScreen> {
     // and onResize fires before history data arrives.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _terminalService.connect();
+      _startForegroundTask();
     });
+  }
+
+  Future<void> _startForegroundTask() async {
+    FlutterForegroundTask.init(
+      androidNotificationOptions: AndroidNotificationOptions(
+        channelId: 'terminal_foreground',
+        channelName: 'Terminal Verbindung',
+        channelDescription: 'Hält die Terminal-Verbindung im Hintergrund aktiv',
+        channelImportance: NotificationChannelImportance.LOW,
+        priority: NotificationPriority.LOW,
+      ),
+      iosNotificationOptions: const IOSNotificationOptions(),
+      foregroundTaskOptions: ForegroundTaskOptions(
+        autoRunOnBoot: false,
+        autoRunOnMyPackageReplaced: false,
+        allowWakeLock: true,
+        allowWifiLock: true,
+      ),
+    );
+
+    FlutterForegroundTask.startService(
+      notificationTitle: 'Terminal Streamer',
+      notificationText: '${widget.session.title} verbunden',
+    );
   }
 
   void _copySelection() {
@@ -87,6 +113,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   @override
   void dispose() {
+    FlutterForegroundTask.stopService();
     _terminalService.dispose();
     _terminalController.dispose();
     _focusNode.dispose();
