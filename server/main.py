@@ -260,8 +260,18 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
 
     await websocket.accept()
 
+    # Event to synchronize: wait for client's initial resize before sending history
+    initial_resize = asyncio.Event()
+
     async def read_terminal():
         """Read terminal output and send to client."""
+        # Wait for the client to report its actual terminal dimensions
+        # so history and new output render correctly.
+        try:
+            await asyncio.wait_for(initial_resize.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            pass  # proceed anyway after 5s
+
         subscription = manager.subscribe(session_id)
         if not subscription:
             try:
@@ -274,11 +284,14 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
         state = {"buffer": "", "last_output_time": time.time(), "notified": False}
 
         try:
-            # Send history first so the client sees the "current picture"
             if history:
+                # Prepend terminal reset so the client starts in a clean state:
+                # \x1bc = full reset, \x1b[H = cursor home, \x1b[2J = clear screen
+                reset = b"\x1bc\x1b[H\x1b[2J"
+                combined = reset + history
                 await websocket.send_json({
                     "type": "output",
-                    "data": base64.b64encode(history).decode("ascii"),
+                    "data": base64.b64encode(combined).decode("ascii"),
                 })
                 # Buffer history for question detection
                 text = history.decode("utf-8", errors="replace")
@@ -347,6 +360,7 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
                 elif msg_type == "resize":
                     cols = message.get("cols", 120)
                     rows = message.get("rows", 30)
+                    initial_resize.set()
                     manager.resize(session_id, cols, rows)
         except WebSocketDisconnect:
             pass

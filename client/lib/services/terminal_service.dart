@@ -67,6 +67,15 @@ class TerminalService with WidgetsBindingObserver {
         }));
       }
     };
+
+    // Send initial resize immediately so the server knows our dimensions
+    // before sending history. The terminal has already been laid out at
+    // this point (connect() is called in addPostFrameCallback).
+    _channel!.sink.add(jsonEncode({
+      'type': 'resize',
+      'cols': terminal.viewWidth,
+      'rows': terminal.viewHeight,
+    }));
   }
 
   void _onMessage(dynamic message) {
