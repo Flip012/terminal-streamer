@@ -18,6 +18,7 @@ class _SessionsScreenState extends State<SessionsScreen> {
   late final ApiService _api;
   List<TerminalSessionInfo> _sessions = [];
   bool _loading = true;
+  bool _creating = false;
   String? _error;
 
   @override
@@ -51,6 +52,8 @@ class _SessionsScreenState extends State<SessionsScreen> {
   }
 
   Future<void> _createSession() async {
+    if (_creating) return;
+    setState(() => _creating = true);
     try {
       final session = await _api.createSession(title: 'Terminal');
       if (mounted) {
@@ -65,6 +68,8 @@ class _SessionsScreenState extends State<SessionsScreen> {
           ),
         );
       }
+    } finally {
+      if (mounted) setState(() => _creating = false);
     }
   }
 
@@ -81,18 +86,37 @@ class _SessionsScreenState extends State<SessionsScreen> {
         .then((_) => _refresh());
   }
 
-  Future<void> _deleteSession(String sessionId) async {
-    try {
-      await _api.deleteSession(sessionId);
-      _refresh();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('$e'),
-            duration: const Duration(seconds: 5),
+  Future<void> _confirmDeleteSession(String sessionId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Session löschen?'),
+        content: const Text('Diese Aktion kann nicht rückgängig gemacht werden.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Abbrechen'),
           ),
-        );
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Löschen', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      try {
+        await _api.deleteSession(sessionId);
+        _refresh();
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('$e'),
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
       }
     }
   }
@@ -120,9 +144,15 @@ class _SessionsScreenState extends State<SessionsScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _createSession,
-        icon: const Icon(Icons.add),
-        label: const Text('New Terminal'),
+        onPressed: _creating ? null : _createSession,
+        icon: _creating
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              )
+            : const Icon(Icons.add),
+        label: Text(_creating ? 'Erstelle...' : 'New Terminal'),
       ),
       body: _buildBody(),
     );
@@ -175,7 +205,7 @@ class _SessionsScreenState extends State<SessionsScreen> {
             ),
             trailing: IconButton(
               icon: const Icon(Icons.delete, color: Colors.red),
-              onPressed: () => _deleteSession(session.id),
+              onPressed: () => _confirmDeleteSession(session.id),
             ),
             onTap: () => _openTerminal(session),
           );

@@ -45,8 +45,9 @@ def save_config(config: dict):
         json.dump(config, f, indent=2)
 
 
-def get_default_shell() -> str:
-    config = load_config()
+def get_default_shell(config: dict | None = None) -> str:
+    if config is None:
+        config = load_config()
     if config["default_shell"]:
         return config["default_shell"]
     if os.name == "nt":

@@ -172,9 +172,29 @@ class TerminalManager:
         if not session:
             return
 
+        loop = asyncio.get_event_loop()
+
         while session._alive:
             try:
-                data = await self._read_from_pty(session)
+                if sys.platform == "win32":
+                    data = await self._read_from_pty(session)
+                else:
+                    # Wait until fd is readable, then read (avoids busy-polling)
+                    readable = loop.create_future()
+
+                    def _on_readable():
+                        if not readable.done():
+                            readable.set_result(True)
+                        loop.remove_reader(session._master_fd)
+
+                    try:
+                        loop.add_reader(session._master_fd, _on_readable)
+                        await readable
+                        data = await self._read_from_pty(session)
+                    except (ValueError, OSError):
+                        # fd closed
+                        data = None
+
                 if data is None:
                     session._alive = False
                     break
@@ -204,11 +224,17 @@ class TerminalManager:
                     except Exception:
                         pass
 
-                    # Broadcast to subscribers
+                    # Broadcast to subscribers (non-blocking, drop if queue full)
                     for queue in session._subscribers:
-                        await queue.put(data)
-                else:
-                    await asyncio.sleep(0.02)
+                        try:
+                            queue.put_nowait(data)
+                        except asyncio.QueueFull:
+                            # Slow consumer – drop oldest, enqueue new
+                            try:
+                                queue.get_nowait()
+                            except asyncio.QueueEmpty:
+                                pass
+                            queue.put_nowait(data)
             except Exception:
                 session._alive = False
                 break
@@ -256,7 +282,7 @@ class TerminalManager:
         if not session or not session._alive:
             return None
 
-        queue = asyncio.Queue()
+        queue = asyncio.Queue(maxsize=1000)
         session._subscribers.append(queue)
         return queue, session._output_history
 
@@ -357,11 +383,19 @@ class TerminalManager:
                 if session._process and session._process.isalive():
                     session._process.terminate()
             else:
-                if session._master_fd is not None:
-                    os.close(session._master_fd)
+                # Signal first, then close fd
                 if session._pid is not None:
                     try:
                         os.kill(session._pid, signal.SIGTERM)
+                    except (ProcessLookupError, ChildProcessError, OSError):
+                        pass
+                if session._master_fd is not None:
+                    try:
+                        os.close(session._master_fd)
+                    except OSError:
+                        pass
+                if session._pid is not None:
+                    try:
                         os.waitpid(session._pid, os.WNOHANG)
                     except (ProcessLookupError, ChildProcessError):
                         pass
@@ -369,17 +403,21 @@ class TerminalManager:
             pass
         return True
 
-    def list_sessions(self) -> list[dict]:
-        # Check alive status for unix sessions
-        if sys.platform != "win32":
-            for session in self.sessions.values():
-                if session._pid is not None and session._alive:
-                    try:
-                        pid, status = os.waitpid(session._pid, os.WNOHANG)
-                        if pid != 0:
-                            session._alive = False
-                    except ChildProcessError:
+    def _reap_dead_sessions(self):
+        """Check for terminated child processes and mark them as dead."""
+        if sys.platform == "win32":
+            return
+        for session in self.sessions.values():
+            if session._pid is not None and session._alive:
+                try:
+                    pid, status = os.waitpid(session._pid, os.WNOHANG)
+                    if pid != 0:
                         session._alive = False
+                except ChildProcessError:
+                    session._alive = False
+
+    def list_sessions(self) -> list[dict]:
+        self._reap_dead_sessions()
         return [s.to_dict() for s in self.sessions.values()]
 
     def destroy_all(self):
