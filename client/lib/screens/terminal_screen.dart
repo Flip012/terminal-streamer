@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
 import '../models/server_config.dart';
 import '../models/terminal_session.dart';
-import '../services/terminal_service.dart';
+import '../services/terminal_service.dart' show TerminalService, ConnectionStatus;
 
 class TerminalScreen extends StatefulWidget {
   final ServerConfig config;
@@ -107,7 +107,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.session.title),
+        title: Row(
+          children: [
+            Expanded(child: Text(widget.session.title)),
+            _ConnectionIndicator(service: _terminalService),
+          ],
+        ),
         actions: [
           PopupMenuButton<String>(
             onSelected: (value) {
@@ -162,6 +167,34 @@ class _TerminalScreenState extends State<TerminalScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ConnectionIndicator extends StatelessWidget {
+  final TerminalService service;
+
+  const _ConnectionIndicator({required this.service});
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<ConnectionStatus>(
+      valueListenable: service.connectionStatus,
+      builder: (context, status, _) {
+        final (Color color, String tooltip) = switch (status) {
+          ConnectionStatus.connected => (Colors.green, 'Verbunden'),
+          ConnectionStatus.connecting => (Colors.orange, 'Verbinde...'),
+          ConnectionStatus.reconnecting => (Colors.red, 'Wiederverbindung...'),
+          ConnectionStatus.disconnected => (Colors.grey, 'Getrennt'),
+        };
+        return Tooltip(
+          message: tooltip,
+          child: Padding(
+            padding: const EdgeInsets.only(left: 8),
+            child: Icon(Icons.circle, size: 12, color: color),
+          ),
+        );
+      },
     );
   }
 }

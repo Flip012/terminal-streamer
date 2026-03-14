@@ -11,6 +11,8 @@ import 'question_detector.dart';
 import 'notification_service.dart';
 import 'foreground_service.dart';
 
+enum ConnectionStatus { connecting, connected, reconnecting, disconnected }
+
 class TerminalService with WidgetsBindingObserver {
   final ServerConfig config;
   final String sessionId;
@@ -22,6 +24,9 @@ class TerminalService with WidgetsBindingObserver {
   bool _disposed = false;
   bool _sessionEnded = false;
   bool _connected = false;
+
+  /// Observable connection status for UI indicators.
+  final connectionStatus = ValueNotifier<ConnectionStatus>(ConnectionStatus.connecting);
 
   final _questionDetector = QuestionDetector();
   Timer? _questionCheckTimer;
@@ -101,6 +106,9 @@ class TerminalService with WidgetsBindingObserver {
       '${config.wsBaseUrl}/ws/terminal/$sessionId?api_key=${Uri.encodeComponent(config.apiKey)}',
     );
     _channel = WebSocketChannel.connect(uri);
+    connectionStatus.value = _reconnectAttempts > 0
+        ? ConnectionStatus.reconnecting
+        : ConnectionStatus.connecting;
 
     _subscription = _channel!.stream.listen(
       _onMessage,
@@ -166,6 +174,7 @@ class TerminalService with WidgetsBindingObserver {
     // Connection confirmed healthy
     _connected = true;
     _reconnectAttempts = 0;
+    connectionStatus.value = ConnectionStatus.connected;
     _startHeartbeat();
 
     if (wasReconnecting) {
@@ -224,6 +233,7 @@ class TerminalService with WidgetsBindingObserver {
       if (_disposed || _sessionEnded) return;
       _connected = false;
       _stopHeartbeat();
+      connectionStatus.value = ConnectionStatus.reconnecting;
       terminal.write(
         '\r\n\x1b[31m[Keine Antwort vom Server – Verbindung verloren]\x1b[0m\r\n',
       );
@@ -239,6 +249,7 @@ class TerminalService with WidgetsBindingObserver {
     if (_disposed) return;
     _connected = false;
     _stopHeartbeat();
+    connectionStatus.value = ConnectionStatus.reconnecting;
     final message = _friendlyError(error);
     terminal.write('\r\n\x1b[31m[Verbindungsfehler: $message]\x1b[0m\r\n');
     // Don't schedule reconnect here – onDone will follow
@@ -247,6 +258,9 @@ class TerminalService with WidgetsBindingObserver {
   void _onDone() {
     _connected = false;
     _stopHeartbeat();
+    connectionStatus.value = _sessionEnded
+        ? ConnectionStatus.disconnected
+        : ConnectionStatus.reconnecting;
     if (_disposed || _sessionEnded) return;
     _scheduleReconnect();
   }
@@ -255,6 +269,7 @@ class TerminalService with WidgetsBindingObserver {
     if (_disposed || _sessionEnded) return;
 
     if (_reconnectAttempts >= _maxReconnectAttempts) {
+      connectionStatus.value = ConnectionStatus.disconnected;
       terminal.write(
         '\r\n\x1b[31m[Verbindung verloren – maximale Versuche erreicht. '
         'Bitte Session neu öffnen.]\x1b[0m\r\n',
@@ -361,6 +376,7 @@ class TerminalService with WidgetsBindingObserver {
     _subscription?.cancel();
     _channel?.sink.close();
     _inputBuffer.clear();
+    connectionStatus.dispose();
     TerminalForegroundService.instance.stop();
   }
 }
