@@ -31,7 +31,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _terminal = Terminal(
       maxLines: 10000,
     );
-    _terminal.resize(widget.session.cols, widget.session.rows);
 
     _terminalService = TerminalService(
       config: widget.config,
