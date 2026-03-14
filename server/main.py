@@ -98,30 +98,40 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
 
     async def read_terminal():
         """Read terminal output and send to client."""
-        while True:
-            session = manager.sessions.get(session_id)
-            if not session or not session._alive:
-                try:
-                    await websocket.send_json({"type": "exit"})
-                except Exception:
-                    pass
-                break
+        subscription = manager.subscribe(session_id)
+        if not subscription:
+            try:
+                await websocket.send_json({"type": "exit"})
+            except Exception:
+                pass
+            return
 
-            data = await manager.read_output(session_id)
-            if data is None:
-                try:
-                    await websocket.send_json({"type": "exit"})
-                except Exception:
-                    pass
-                break
-            if data:
-                # Send as base64 to preserve binary data
+        queue, history = subscription
+
+        try:
+            # Send history first so the client sees the "current picture"
+            if history:
                 await websocket.send_json({
                     "type": "output",
-                    "data": base64.b64encode(data).decode("ascii"),
+                    "data": base64.b64encode(history).decode("ascii"),
                 })
-            else:
-                await asyncio.sleep(0.02)
+
+            while True:
+                data = await queue.get()
+                if data is None:  # Session ended
+                    await websocket.send_json({"type": "exit"})
+                    break
+                
+                if data:
+                    # Send as base64 to preserve binary data
+                    await websocket.send_json({
+                        "type": "output",
+                        "data": base64.b64encode(data).decode("ascii"),
+                    })
+        except Exception:
+            pass
+        finally:
+            manager.unsubscribe(session_id, queue)
 
     async def write_terminal():
         """Read client input and write to terminal."""

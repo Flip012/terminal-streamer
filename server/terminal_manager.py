@@ -28,6 +28,10 @@ class TerminalSession:
     _master_fd: Optional[int] = field(default=None, repr=False)
     _pid: Optional[int] = field(default=None, repr=False)
     _alive: bool = field(default=True, repr=False)
+    _output_history: bytes = field(default=b"", repr=False)
+    _subscribers: list[asyncio.Queue] = field(default_factory=list, repr=False)
+    _reader_task: Optional[asyncio.Task] = field(default=None, repr=False)
+    _history_limit: int = 100 * 1024  # 100 KB history
 
     def to_dict(self) -> dict:
         return {
@@ -64,9 +68,88 @@ class TerminalManager:
             self._start_unix_pty(session)
 
         self.sessions[session_id] = session
+        
+        # Start background reader
+        session._reader_task = asyncio.create_task(self._read_loop(session_id))
+        
         return session
 
+    async def _read_loop(self, session_id: str):
+        """Continuously read from PTY and broadcast to subscribers."""
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+
+        while session._alive:
+            try:
+                data = await self._read_from_pty(session)
+                if data is None:
+                    session._alive = False
+                    break
+                
+                if data:
+                    # Update history
+                    session._output_history += data
+                    if len(session._output_history) > session._history_limit:
+                        session._output_history = session._output_history[-session._history_limit:]
+                    
+                    # Broadcast to subscribers
+                    for queue in session._subscribers:
+                        await queue.put(data)
+                else:
+                    await asyncio.sleep(0.02)
+            except Exception:
+                session._alive = False
+                break
+        
+        # Notify all subscribers that session ended
+        for queue in session._subscribers:
+            await queue.put(None)
+
+    async def _read_from_pty(self, session: TerminalSession) -> Optional[bytes]:
+        """Low-level PTY read."""
+        try:
+            if sys.platform == "win32":
+                proc = session._process
+                if not proc.isalive():
+                    return None
+                data = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: proc.read(4096)
+                )
+                # winpty returns a string (already decoded)
+                return data.encode("utf-8") if isinstance(data, str) else data
+            else:
+                try:
+                    data = os.read(session._master_fd, 4096)
+                    return data
+                except BlockingIOError:
+                    return b""
+                except OSError:
+                    return None
+        except Exception:
+            return None
+
+    def subscribe(self, session_id: str) -> Optional[tuple[asyncio.Queue, bytes]]:
+        """Subscribe to terminal output. Returns (queue, history)."""
+        session = self.sessions.get(session_id)
+        if not session or not session._alive:
+            return None
+        
+        queue = asyncio.Queue()
+        session._subscribers.append(queue)
+        return queue, session._output_history
+
+    def unsubscribe(self, session_id: str, queue: asyncio.Queue):
+        """Unsubscribe from terminal output."""
+        session = self.sessions.get(session_id)
+        if session:
+            try:
+                session._subscribers.remove(queue)
+            except ValueError:
+                pass
+
     def _start_winpty(self, session: TerminalSession):
+        os.environ.setdefault("TERM", "xterm-256color")
         proc = winpty.PtyProcess.spawn(
             session.shell,
             dimensions=(session.rows, session.cols),
@@ -89,33 +172,6 @@ class TerminalManager:
             flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
             fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
-    async def read_output(self, session_id: str) -> Optional[bytes]:
-        session = self.sessions.get(session_id)
-        if not session or not session._alive:
-            return None
-
-        try:
-            if sys.platform == "win32":
-                proc = session._process
-                if not proc.isalive():
-                    session._alive = False
-                    return None
-                data = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: proc.read(4096)
-                )
-                return data.encode("utf-8") if isinstance(data, str) else data
-            else:
-                try:
-                    data = os.read(session._master_fd, 4096)
-                    return data
-                except BlockingIOError:
-                    return b""
-                except OSError:
-                    session._alive = False
-                    return None
-        except Exception:
-            session._alive = False
-            return None
 
     def write_input(self, session_id: str, data: str) -> bool:
         session = self.sessions.get(session_id)
@@ -158,6 +214,9 @@ class TerminalManager:
             return False
 
         session._alive = False
+        if session._reader_task:
+            session._reader_task.cancel()
+        
         try:
             if sys.platform == "win32":
                 if session._process and session._process.isalive():
