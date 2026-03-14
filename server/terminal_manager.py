@@ -455,9 +455,21 @@ class TerminalManager:
                     _restored=True,
                 )
 
-                # Fresh pyte screen — don't replay old snapshot to avoid stale content
+                # Initialize pyte screen
                 session._pyte_screen = pyte.Screen(session.cols, session.rows)
                 session._pyte_stream = pyte.ByteStream(session._pyte_screen)
+
+                # Restore screen snapshot for non-Claude sessions so the
+                # user sees previous output. Claude sessions skip this
+                # since auto-resume provides fresh content.
+                claude_resume_id = entry.get("claude_resume_id")
+                if not claude_resume_id:
+                    snapshot_b64 = entry.get("screen_snapshot_b64", "")
+                    if snapshot_b64:
+                        try:
+                            session._pyte_stream.feed(base64.b64decode(snapshot_b64))
+                        except Exception:
+                            pass
 
                 # Restore output history only for question detection buffer
                 history_b64 = entry.get("output_history_b64", "")
