@@ -1,12 +1,12 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
-import 'dart:math';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/widgets.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:xterm/xterm.dart';
 import '../models/server_config.dart';
+import '../utils/backoff.dart';
 import 'question_detector.dart';
 import 'notification_service.dart';
 import 'foreground_service.dart';
@@ -23,10 +23,11 @@ class TerminalService with WidgetsBindingObserver {
   StreamSubscription? _subscription;
   bool _disposed = false;
   bool _sessionEnded = false;
-  bool _connected = false;
 
   /// Observable connection status for UI indicators.
   final connectionStatus = ValueNotifier<ConnectionStatus>(ConnectionStatus.connecting);
+
+  bool get _connected => connectionStatus.value == ConnectionStatus.connected;
 
   final _questionDetector = QuestionDetector();
   Timer? _questionCheckTimer;
@@ -34,8 +35,8 @@ class TerminalService with WidgetsBindingObserver {
 
   // Reconnect state
   static const _maxReconnectAttempts = 10;
-  static const _initialDelay = Duration(seconds: 2);
-  static const _maxDelay = Duration(seconds: 30);
+  static const _backoffBase = Duration(seconds: 2);
+  static const _backoffMax = Duration(seconds: 30);
   int _reconnectAttempts = 0;
   Timer? _reconnectTimer;
 
@@ -48,6 +49,7 @@ class TerminalService with WidgetsBindingObserver {
   // Input buffer – queues input while disconnected
   final _inputBuffer = Queue<String>();
   static const _maxBufferedInputs = 100;
+  bool _inputBufferOverflowWarned = false;
 
   // Network connectivity
   StreamSubscription? _connectivitySubscription;
@@ -58,6 +60,11 @@ class TerminalService with WidgetsBindingObserver {
     required this.terminal,
     this.sessionTitle = 'Terminal',
   });
+
+  void _setStatus(ConnectionStatus status) {
+    if (_disposed || connectionStatus.value == status) return;
+    connectionStatus.value = status;
+  }
 
   void connect() {
     WidgetsBinding.instance.addObserver(this);
@@ -106,9 +113,9 @@ class TerminalService with WidgetsBindingObserver {
       '${config.wsBaseUrl}/ws/terminal/$sessionId?api_key=${Uri.encodeComponent(config.apiKey)}',
     );
     _channel = WebSocketChannel.connect(uri);
-    connectionStatus.value = _reconnectAttempts > 0
+    _setStatus(_reconnectAttempts > 0
         ? ConnectionStatus.reconnecting
-        : ConnectionStatus.connecting;
+        : ConnectionStatus.connecting);
 
     _subscription = _channel!.stream.listen(
       _onMessage,
@@ -145,11 +152,18 @@ class TerminalService with WidgetsBindingObserver {
       // Buffer input while disconnected
       if (_inputBuffer.length < _maxBufferedInputs) {
         _inputBuffer.add(data);
+        _inputBufferOverflowWarned = false;
+      } else if (!_inputBufferOverflowWarned) {
+        _inputBufferOverflowWarned = true;
+        terminal.write(
+          '\r\n\x1b[31m[Eingabepuffer voll – weitere Eingaben gehen verloren]\x1b[0m\r\n',
+        );
       }
     }
   }
 
   void _flushInputBuffer() {
+    _inputBufferOverflowWarned = false;
     while (_inputBuffer.isNotEmpty) {
       final data = _inputBuffer.removeFirst();
       _sendJson({'type': 'input', 'data': data});
@@ -169,17 +183,20 @@ class TerminalService with WidgetsBindingObserver {
   void _onMessage(dynamic message) {
     if (_disposed) return;
 
-    final wasReconnecting = _reconnectAttempts > 0;
+    final wasDisconnected = !_connected;
+    final wasReconnecting = wasDisconnected && _reconnectAttempts > 0;
 
     // Connection confirmed healthy
-    _connected = true;
+    _setStatus(ConnectionStatus.connected);
     _reconnectAttempts = 0;
-    connectionStatus.value = ConnectionStatus.connected;
-    _startHeartbeat();
 
-    if (wasReconnecting) {
-      terminal.write('\r\n\x1b[32m[Verbindung wiederhergestellt]\x1b[0m\r\n');
-      TerminalForegroundService.instance.clearQuestion(sessionTitle);
+    // Start heartbeat once on connection, not on every message
+    if (wasDisconnected) {
+      _startHeartbeat();
+      if (wasReconnecting) {
+        terminal.write('\r\n\x1b[32m[Verbindung wiederhergestellt]\x1b[0m\r\n');
+        TerminalForegroundService.instance.clearQuestion(sessionTitle);
+      }
       _flushInputBuffer();
     }
 
@@ -195,6 +212,7 @@ class TerminalService with WidgetsBindingObserver {
       } else if (type == 'exit') {
         _sessionEnded = true;
         _stopHeartbeat();
+        _setStatus(ConnectionStatus.disconnected);
         terminal.write('\r\n\x1b[33m[Session beendet]\x1b[0m\r\n');
         TerminalForegroundService.instance.showQuestion(
           sessionTitle,
@@ -231,9 +249,8 @@ class TerminalService with WidgetsBindingObserver {
     _pongTimer?.cancel();
     _pongTimer = Timer(_pongTimeout, () {
       if (_disposed || _sessionEnded) return;
-      _connected = false;
       _stopHeartbeat();
-      connectionStatus.value = ConnectionStatus.reconnecting;
+      _setStatus(ConnectionStatus.reconnecting);
       terminal.write(
         '\r\n\x1b[31m[Keine Antwort vom Server – Verbindung verloren]\x1b[0m\r\n',
       );
@@ -247,21 +264,22 @@ class TerminalService with WidgetsBindingObserver {
 
   void _onError(dynamic error) {
     if (_disposed) return;
-    _connected = false;
     _stopHeartbeat();
-    connectionStatus.value = ConnectionStatus.reconnecting;
+    _setStatus(_sessionEnded
+        ? ConnectionStatus.disconnected
+        : ConnectionStatus.reconnecting);
     final message = _friendlyError(error);
     terminal.write('\r\n\x1b[31m[Verbindungsfehler: $message]\x1b[0m\r\n');
     // Don't schedule reconnect here – onDone will follow
   }
 
   void _onDone() {
-    _connected = false;
+    if (_disposed) return;
     _stopHeartbeat();
-    connectionStatus.value = _sessionEnded
+    _setStatus(_sessionEnded
         ? ConnectionStatus.disconnected
-        : ConnectionStatus.reconnecting;
-    if (_disposed || _sessionEnded) return;
+        : ConnectionStatus.reconnecting);
+    if (_sessionEnded) return;
     _scheduleReconnect();
   }
 
@@ -269,7 +287,7 @@ class TerminalService with WidgetsBindingObserver {
     if (_disposed || _sessionEnded) return;
 
     if (_reconnectAttempts >= _maxReconnectAttempts) {
-      connectionStatus.value = ConnectionStatus.disconnected;
+      _setStatus(ConnectionStatus.disconnected);
       terminal.write(
         '\r\n\x1b[31m[Verbindung verloren – maximale Versuche erreicht. '
         'Bitte Session neu öffnen.]\x1b[0m\r\n',
@@ -282,7 +300,11 @@ class TerminalService with WidgetsBindingObserver {
     }
 
     _reconnectAttempts++;
-    final delay = _getBackoffDelay(_reconnectAttempts);
+    final delay = backoffDelay(
+      attempt: _reconnectAttempts - 1,
+      base: _backoffBase,
+      max: _backoffMax,
+    );
     final delaySec = delay.inSeconds;
 
     terminal.write(
@@ -300,15 +322,6 @@ class TerminalService with WidgetsBindingObserver {
       terminal.write('\x1b[33m[Verbinde...]\x1b[0m\r\n');
       _connectWebSocket();
     });
-  }
-
-  Duration _getBackoffDelay(int attempt) {
-    // Exponential backoff with jitter: 2s, 4s, 8s, ... capped at 30s
-    final baseMs = _initialDelay.inMilliseconds * pow(2, attempt - 1);
-    final cappedMs = min(baseMs.toInt(), _maxDelay.inMilliseconds);
-    // Add 0-25% jitter to avoid thundering herd
-    final jitter = (cappedMs * 0.25 * (DateTime.now().millisecond / 1000)).toInt();
-    return Duration(milliseconds: cappedMs + jitter);
   }
 
   String _friendlyError(dynamic error) {

@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 import 'package:http/http.dart' as http;
 import '../models/server_config.dart';
 import '../models/terminal_session.dart';
+import '../utils/backoff.dart';
 
 class ApiService {
   final ServerConfig config;
@@ -160,9 +160,10 @@ class ApiService {
   }
 
   Future<void> _retryDelay(int attempt) async {
-    final baseMs = _initialRetryDelay.inMilliseconds * pow(2, attempt);
-    final jitter = (baseMs * 0.25 * (DateTime.now().millisecond / 1000)).toInt();
-    await Future.delayed(Duration(milliseconds: baseMs.toInt() + jitter));
+    await Future.delayed(backoffDelay(
+      attempt: attempt,
+      base: _initialRetryDelay,
+    ));
   }
 
   void _checkStatus(http.Response response, String action) {
