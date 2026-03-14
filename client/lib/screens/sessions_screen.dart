@@ -164,7 +164,7 @@ class _SessionsScreenState extends State<SessionsScreen> {
             title: Text(session.title),
             subtitle: Text(
               hasResume
-                  ? 'Claude Code  ${session.claudeResumeId!.substring(0, 8)}...'
+                  ? 'Claude Code  ${session.claudeResumeId}'
                   : '${session.shell} - ${session.cols}x${session.rows}',
             ),
             trailing: IconButton(

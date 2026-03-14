@@ -415,7 +415,7 @@
         <div class="session-card" onclick="openTerminal('${s.id}', '${s.title || s.shell}')">
           <div class="session-info">
             <h3><span class="status-dot ${s.alive ? "alive" : "dead"}"></span>${s.title || s.shell}</h3>
-            <p>${s.claude_resume_id ? '🤖 Claude Code &middot; ' + s.claude_resume_id.substring(0, 8) + '...' : s.shell + ' &middot; ' + s.cols + 'x' + s.rows} &middot; ${new Date(s.created_at * 1000).toLocaleTimeString()}</p>
+            <p>${s.claude_resume_id ? '🤖 Claude Code &middot; ' + s.claude_resume_id : s.shell + ' &middot; ' + s.cols + 'x' + s.rows} &middot; ${new Date(s.created_at * 1000).toLocaleTimeString()}</p>
           </div>
           <div class="session-actions">
             <button class="btn-delete" onclick="event.stopPropagation(); deleteSession('${s.id}')">Löschen</button>
