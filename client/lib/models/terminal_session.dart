@@ -6,6 +6,8 @@ class TerminalSessionInfo {
   final int rows;
   final String title;
   final bool alive;
+  final bool restored;
+  final String? claudeResumeId;
 
   const TerminalSessionInfo({
     required this.id,
@@ -15,6 +17,8 @@ class TerminalSessionInfo {
     required this.rows,
     required this.title,
     required this.alive,
+    this.restored = false,
+    this.claudeResumeId,
   });
 
   factory TerminalSessionInfo.fromJson(Map<String, dynamic> json) =>
@@ -26,5 +30,7 @@ class TerminalSessionInfo {
         rows: json['rows'] as int,
         title: json['title'] as String,
         alive: json['alive'] as bool,
+        restored: json['restored'] as bool? ?? false,
+        claudeResumeId: json['claude_resume_id'] as String?,
       );
 }

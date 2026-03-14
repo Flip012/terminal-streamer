@@ -155,14 +155,17 @@ class _SessionsScreenState extends State<SessionsScreen> {
         itemCount: _sessions.length,
         itemBuilder: (context, index) {
           final session = _sessions[index];
+          final hasResume = session.claudeResumeId != null;
           return ListTile(
             leading: Icon(
-              Icons.terminal,
+              hasResume ? Icons.smart_toy : Icons.terminal,
               color: session.alive ? Colors.green : Colors.grey,
             ),
             title: Text(session.title),
             subtitle: Text(
-              '${session.shell} - ${session.cols}x${session.rows}',
+              hasResume
+                  ? 'Claude Code  ${session.claudeResumeId!.substring(0, 8)}...'
+                  : '${session.shell} - ${session.cols}x${session.rows}',
             ),
             trailing: IconButton(
               icon: const Icon(Icons.delete, color: Colors.red),

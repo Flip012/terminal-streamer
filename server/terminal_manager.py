@@ -12,8 +12,8 @@ from typing import Optional
 
 import pyte
 
-# Regex to detect Claude Code resume session ID in terminal output
-_CLAUDE_RESUME_RE = re.compile(r"claude\s+--resume\s+([0-9a-f-]{36})")
+# Regex to detect Claude Code resume ID from the status line ("/resume <uuid>")
+_CLAUDE_RESUME_RE = re.compile(r"/resume\s+([0-9a-f-]{36})")
 
 if sys.platform == "win32":
     import winpty
@@ -129,6 +129,7 @@ class TerminalSession:
             "title": self.title or self.shell,
             "alive": self._alive,
             "restored": self._restored,
+            "claude_resume_id": self._claude_resume_id,
         }
 
 
