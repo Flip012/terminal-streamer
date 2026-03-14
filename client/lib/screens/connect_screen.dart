@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/server_config.dart';
+import '../services/api_service.dart';
 import '../services/config_storage.dart';
 import 'sessions_screen.dart';
 
@@ -42,7 +43,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
     if (host.isEmpty || port == null || apiKey.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill in all fields')),
+        const SnackBar(content: Text('Bitte alle Felder ausfüllen.')),
       );
       return;
     }
@@ -57,6 +58,10 @@ class _ConnectScreenState extends State<ConnectScreen> {
     setState(() => _loading = true);
 
     try {
+      // Actually test the connection before navigating
+      final api = ApiService(config);
+      await api.testConnection();
+
       await ConfigStorage.save(config);
       if (mounted) {
         Navigator.of(context).pushReplacement(
@@ -68,7 +73,10 @@ class _ConnectScreenState extends State<ConnectScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Connection failed: $e')),
+          SnackBar(
+            content: Text('Verbindung fehlgeschlagen: $e'),
+            duration: const Duration(seconds: 5),
+          ),
         );
       }
     } finally {

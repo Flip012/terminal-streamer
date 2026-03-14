@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "saved_at": 1773502254.1764627,
+  "sessions": [
+    {
+      "id": "aca182dc-a757-4f56-a2f2-11f3aa70d96d",
+      "shell": "C:\\WINDOWS\\system32\\cmd.exe",
+      "title": "Terminal",
+      "cols": 227,
+      "rows": 52,
+      "created_at": 1773469476.3860776,
+      "screen_snapshot_b64": "G1swbU1pY3Jvc29mdCBXaW5kb3dzIFtWZXJzaW9uIDEwLjAuMjYyMDAuNzg0MF0NChtbMG0oYykgTWljcm9zb2Z0IENvcnBvcmF0aW9uLiBBbGxlIFJlY2h0ZSB2b3JiZWhhbHRlbi4NChtbMG0NChtbMG0odmVudikgQzpcZ2l0XHRlcm1pbmFsLXN0cmVhbWVyXHNlcnZlcj4NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0NChtbMG0bWzBtG1s0OzQwSA==",
+      "output_history_b64": "G1sxdBtbYxtbPzEwMDRoG1s/OTAwMWgbWz83bBtbPzdoTWljcm9zb2Z0IFdpbmRvd3MgW1ZlcnNpb24gMTAuMC4yNjIwMC43ODQwXQ0KKGMpIE1pY3Jvc29mdCBDb3Jwb3JhdGlvbi4gQWxsZSBSZWNodGUgdm9yYmVoYWx0ZW4uDQoNCih2ZW52KSBDOlxnaXRcdGVybWluYWwtc3RyZWFtZXJcc2VydmVyPg==",
+      "claude_resume_id": null
+    }
+  ]
+}

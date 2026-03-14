@@ -72,8 +72,6 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 # In-memory push subscription store: {endpoint: subscription_info}
 push_subscriptions: dict[str, dict] = {}
 
-# Track terminal output state per session for question detection
-session_output_state: dict[str, dict] = {}
 QUESTION_IDLE_SECONDS = 3  # seconds of silence before checking for question
 OUTPUT_BUFFER_MAX = 4096  # max bytes to buffer for pattern matching
 
@@ -189,7 +187,7 @@ async def list_sessions():
 
 @app.post("/api/sessions", dependencies=[Depends(verify_api_key)])
 async def create_session(req: CreateSessionRequest):
-    shell = req.shell or get_default_shell()
+    shell = req.shell or get_default_shell(config)
     session = manager.create_session(
         shell=shell, cols=req.cols, rows=req.rows, title=req.title
     )
@@ -240,10 +238,11 @@ async def push_unsubscribe(req: PushSubscriptionRequest):
     return {"status": "ok"}
 
 
-def send_push_notification(title: str, body: str, tag: str = "terminal"):
-    """Send push notification to all subscribed clients."""
+def _send_push_sync(title: str, body: str, tag: str):
+    """Send push notification to all subscribed clients (runs in thread)."""
     dead_endpoints = []
-    for endpoint, sub_info in push_subscriptions.items():
+    # Snapshot to avoid RuntimeError from concurrent dict mutation
+    for endpoint, sub_info in list(push_subscriptions.items()):
         try:
             webpush(
                 subscription_info=sub_info,
@@ -258,6 +257,12 @@ def send_push_notification(title: str, body: str, tag: str = "terminal"):
             pass
     for ep in dead_endpoints:
         push_subscriptions.pop(ep, None)
+
+
+async def send_push_notification(title: str, body: str, tag: str = "terminal"):
+    """Send push notification without blocking the event loop."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _send_push_sync, title, body, tag)
 
 
 # --- Serve web client ---
@@ -339,7 +344,7 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
                         question = detect_question(state["buffer"])
                         if question:
                             state["notified"] = True
-                            send_push_notification(
+                            await send_push_notification(
                                 "Claude Code wartet",
                                 question[:150],
                                 tag=f"question-{session_id}",
@@ -349,7 +354,7 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
                 if data is None:  # Session ended
                     await websocket.send_json({"type": "exit"})
                     if push_subscriptions:
-                        send_push_notification(
+                        await send_push_notification(
                             "Session beendet",
                             f"Terminal-Session {session_id[:8]}... wurde beendet.",
                             tag=f"exit-{session_id}",
@@ -369,8 +374,10 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
                         "type": "output",
                         "data": base64.b64encode(data).decode("ascii"),
                     })
-        except Exception:
+        except (WebSocketDisconnect, ConnectionError):
             pass
+        except Exception as e:
+            print(f"Warning: read_terminal error for {session_id[:8]}: {e}")
         finally:
             manager.unsubscribe(session_id, queue)
 
@@ -389,6 +396,8 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
                     rows = message.get("rows", 30)
                     manager.resize(session_id, cols, rows)
                     initial_resize.set()
+                elif msg_type == "ping":
+                    await websocket.send_json({"type": "pong"})
         except WebSocketDisconnect:
             pass
 
