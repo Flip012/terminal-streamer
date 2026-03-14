@@ -282,14 +282,22 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
                 pass
             return
 
-        queue, _history = subscription
+        queue, history = subscription
         state = {
-            "buffer": _history.decode("utf-8", errors="replace")[-OUTPUT_BUFFER_MAX:] if _history else "",
+            "buffer": history.decode("utf-8", errors="replace")[-OUTPUT_BUFFER_MAX:] if history else "",
             "last_output_time": time.time(),
             "notified": False,
         }
 
         try:
+            # Send history after resize so the client has correct dimensions.
+            # Prepend a screen clear so old content doesn't mix with new rendering.
+            if history:
+                clear = b"\x1b[H\x1b[2J"
+                await websocket.send_json({
+                    "type": "output",
+                    "data": base64.b64encode(clear + history).decode("ascii"),
+                })
             while True:
                 try:
                     data = await asyncio.wait_for(queue.get(), timeout=0.5)
