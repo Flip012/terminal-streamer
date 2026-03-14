@@ -6,6 +6,7 @@ import signal
 import sys
 import time
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -20,7 +21,22 @@ from config import load_config, get_default_shell
 from terminal_manager import TerminalManager
 
 config = load_config()
-app = FastAPI(title="Terminal Streamer API", version="1.0.0")
+manager = TerminalManager()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print(f"\n{'='*50}")
+    print(f"  Terminal Streamer API")
+    print(f"  Host: {config['host']}:{config['port']}")
+    print(f"  API Key: {config['api_key']}")
+    print(f"  Default Shell: {get_default_shell()}")
+    print(f"{'='*50}\n")
+    yield
+    manager.destroy_all()
+
+
+app = FastAPI(title="Terminal Streamer API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,7 +46,6 @@ app.add_middleware(
 )
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-manager = TerminalManager()
 
 # In-memory push subscription store: {endpoint: subscription_info}
 push_subscriptions: dict[str, dict] = {}
@@ -349,20 +364,6 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
         reader.cancel()
         writer.cancel()
 
-
-@app.on_event("startup")
-async def startup():
-    print(f"\n{'='*50}")
-    print(f"  Terminal Streamer API")
-    print(f"  Host: {config['host']}:{config['port']}")
-    print(f"  API Key: {config['api_key']}")
-    print(f"  Default Shell: {get_default_shell()}")
-    print(f"{'='*50}\n")
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    manager.destroy_all()
 
 
 def main():
