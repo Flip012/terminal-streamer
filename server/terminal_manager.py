@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import sys
 import uuid
 import time
@@ -10,6 +11,9 @@ from pathlib import Path
 from typing import Optional
 
 import pyte
+
+# Regex to detect Claude Code resume session ID in terminal output
+_CLAUDE_RESUME_RE = re.compile(r"claude\s+--resume\s+([0-9a-f-]{36})")
 
 if sys.platform == "win32":
     import winpty
@@ -112,6 +116,8 @@ class TerminalSession:
     _pyte_screen: object = field(default=None, repr=False)
     _pyte_stream: object = field(default=None, repr=False)
     _restored: bool = field(default=False, repr=False)
+    _claude_resume_id: Optional[str] = field(default=None, repr=False)
+    _auto_resume_sent: bool = field(default=False, repr=False)
 
     def to_dict(self) -> dict:
         return {
@@ -188,6 +194,15 @@ class TerminalManager:
                     except Exception:
                         pass
 
+                    # Detect Claude Code resume ID in output
+                    try:
+                        text = data.decode("utf-8", errors="ignore")
+                        match = _CLAUDE_RESUME_RE.search(text)
+                        if match:
+                            session._claude_resume_id = match.group(1)
+                    except Exception:
+                        pass
+
                     # Broadcast to subscribers
                     for queue in session._subscribers:
                         await queue.put(data)
@@ -252,6 +267,16 @@ class TerminalManager:
                 session._subscribers.remove(queue)
             except ValueError:
                 pass
+
+    async def _auto_resume_claude(self, session_id: str, resume_id: str):
+        """Wait for the shell to be ready, then send 'claude --resume <id>'."""
+        # Give the shell a moment to start and show its prompt
+        await asyncio.sleep(1.5)
+        session = self.sessions.get(session_id)
+        if not session or not session._alive:
+            return
+        cmd = f"claude --resume {resume_id}\n"
+        self.write_input(session_id, cmd)
 
     def _start_winpty(self, session: TerminalSession):
         os.environ.setdefault("TERM", "xterm-256color")
@@ -381,6 +406,7 @@ class TerminalManager:
                 "created_at": session.created_at,
                 "screen_snapshot_b64": base64.b64encode(snapshot).decode("ascii"),
                 "output_history_b64": base64.b64encode(session._output_history).decode("ascii"),
+                "claude_resume_id": session._claude_resume_id,
             })
 
         data = {
@@ -447,8 +473,13 @@ class TerminalManager:
                     except Exception:
                         pass
 
+                # Restore Claude Code resume ID
+                session._claude_resume_id = entry.get("claude_resume_id")
+
                 # Inject restoration marker
-                marker = b"\r\n\x1b[33m--- Session restored (new shell) ---\x1b[0m\r\n"
+                marker = b"\r\n\x1b[33m--- Session restored ---\x1b[0m\r\n"
+                if session._claude_resume_id:
+                    marker += f"\x1b[33mAuto-resuming Claude Code session {session._claude_resume_id[:8]}...\x1b[0m\r\n".encode()
                 try:
                     session._pyte_stream.feed(marker)
                 except Exception:
@@ -463,6 +494,13 @@ class TerminalManager:
 
                 self.sessions[session.id] = session
                 session._reader_task = asyncio.create_task(self._read_loop(session.id))
+
+                # Auto-resume Claude Code if we have a resume ID
+                if session._claude_resume_id:
+                    session._auto_resume_sent = True
+                    asyncio.create_task(
+                        self._auto_resume_claude(session.id, session._claude_resume_id)
+                    )
 
             except Exception as e:
                 print(f"Warning: Failed to restore session {entry.get('id', '?')}: {e}")
