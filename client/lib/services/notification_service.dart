@@ -26,6 +26,12 @@ class NotificationService {
       onDidReceiveNotificationResponse: _onNotificationTap,
     );
     _initialized = true;
+
+    // Request notification permission (required on Android 13+).
+    await _plugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.requestNotificationsPermission();
   }
 
   void _onNotificationTap(NotificationResponse response) {
