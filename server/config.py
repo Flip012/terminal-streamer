@@ -25,11 +25,17 @@ def load_config() -> dict:
         config["api_key"] = secrets.token_urlsafe(32)
         save_config(config)
     if not config["vapid_private_key"]:
+        import base64
         from py_vapid import Vapid
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
         vapid = Vapid()
         vapid.generate_keys()
         config["vapid_private_key"] = vapid.private_pem().decode("utf-8")
-        config["vapid_public_key"] = vapid.public_key_urlsafe_base64()
+        raw_pub = vapid.public_key.public_bytes(
+            encoding=Encoding.X962,
+            format=PublicFormat.UncompressedPoint,
+        )
+        config["vapid_public_key"] = base64.urlsafe_b64encode(raw_pub).decode("utf-8").rstrip("=")
         save_config(config)
     return config
 
