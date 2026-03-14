@@ -102,15 +102,42 @@ class TerminalService with WidgetsBindingObserver {
   }
 
   void _onError(dynamic error) {
-    if (!_disposed) {
-      terminal.write('\r\n[Connection error: $error]\r\n');
-    }
+    if (_disposed) return;
+    final message = _friendlyError(error);
+    terminal.write('\r\n\x1b[31m[Verbindungsfehler: $message]\x1b[0m\r\n');
+    TerminalForegroundService.instance.showQuestion(
+      sessionTitle,
+      'Verbindungsfehler: $message',
+    );
   }
 
   void _onDone() {
-    if (!_disposed) {
-      terminal.write('\r\n[Disconnected]\r\n');
+    if (_disposed) return;
+    terminal.write('\r\n\x1b[33m[Verbindung getrennt]\x1b[0m\r\n');
+    TerminalForegroundService.instance.showQuestion(
+      sessionTitle,
+      'Verbindung zum Server getrennt.',
+    );
+  }
+
+  String _friendlyError(dynamic error) {
+    final msg = error.toString();
+    if (msg.contains('SocketException')) {
+      return 'Server nicht erreichbar.';
     }
+    if (msg.contains('TimeoutException')) {
+      return 'Zeitüberschreitung.';
+    }
+    if (msg.contains('HandshakeException') || msg.contains('TLS')) {
+      return 'TLS-Fehler – stimmt die TLS-Einstellung?';
+    }
+    if (msg.contains('4003')) {
+      return 'Ungültiger API-Key.';
+    }
+    if (msg.contains('4004')) {
+      return 'Session nicht gefunden.';
+    }
+    return msg;
   }
 
   @override

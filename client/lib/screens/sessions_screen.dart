@@ -59,7 +59,10 @@ class _SessionsScreenState extends State<SessionsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to create session: $e')),
+          SnackBar(
+            content: Text('$e'),
+            duration: const Duration(seconds: 5),
+          ),
         );
       }
     }
@@ -85,7 +88,10 @@ class _SessionsScreenState extends State<SessionsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to delete session: $e')),
+          SnackBar(
+            content: Text('$e'),
+            duration: const Duration(seconds: 5),
+          ),
         );
       }
     }

@@ -43,7 +43,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
     if (host.isEmpty || port == null || apiKey.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill in all fields')),
+        const SnackBar(content: Text('Bitte alle Felder ausfüllen.')),
       );
       return;
     }
@@ -73,7 +73,10 @@ class _ConnectScreenState extends State<ConnectScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Connection failed: $e')),
+          SnackBar(
+            content: Text('Verbindung fehlgeschlagen: $e'),
+            duration: const Duration(seconds: 5),
+          ),
         );
       }
     } finally {
