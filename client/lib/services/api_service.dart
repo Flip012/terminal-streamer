@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:http/http.dart' as http;
 import '../models/server_config.dart';
 import '../models/terminal_session.dart';
@@ -8,6 +9,8 @@ import '../models/terminal_session.dart';
 class ApiService {
   final ServerConfig config;
   static const _timeout = Duration(seconds: 10);
+  static const _maxRetries = 3;
+  static const _initialRetryDelay = Duration(seconds: 1);
 
   ApiService(this.config);
 
@@ -75,7 +78,7 @@ class ApiService {
   // -- internal helpers --
 
   Future<http.Response> _get(String path, String action) async {
-    final response = await _request(
+    final response = await _requestWithRetry(
       () => http.get(
         Uri.parse('${config.httpBaseUrl}$path'),
         headers: config.headers,
@@ -88,7 +91,7 @@ class ApiService {
 
   Future<http.Response> _post(String path, String action,
       {Map<String, dynamic>? body}) async {
-    final response = await _request(
+    final response = await _requestWithRetry(
       () => http.post(
         Uri.parse('${config.httpBaseUrl}$path'),
         headers: {...config.headers, 'Content-Type': 'application/json'},
@@ -101,7 +104,7 @@ class ApiService {
   }
 
   Future<http.Response> _delete(String path, String action) async {
-    final response = await _request(
+    final response = await _requestWithRetry(
       () => http.delete(
         Uri.parse('${config.httpBaseUrl}$path'),
         headers: config.headers,
@@ -112,24 +115,54 @@ class ApiService {
     return response;
   }
 
-  Future<http.Response> _request(
+  /// Executes an HTTP request with retry logic and exponential backoff.
+  /// Retries on transient errors (timeout, socket, 502/503).
+  Future<http.Response> _requestWithRetry(
     Future<http.Response> Function() fn,
     String action,
   ) async {
-    try {
-      return await fn().timeout(_timeout);
-    } on TimeoutException {
-      throw ApiException(
-        '$action fehlgeschlagen: Zeitüberschreitung – Server antwortet nicht.',
-      );
-    } on SocketException catch (e) {
-      throw ApiException(
-        '$action fehlgeschlagen: Server nicht erreichbar (${e.message}).',
-      );
-    } catch (e) {
-      if (e is ApiException) rethrow;
-      throw ApiException('$action fehlgeschlagen: $e');
+    for (var attempt = 0; attempt <= _maxRetries; attempt++) {
+      try {
+        final response = await fn().timeout(_timeout);
+
+        // Retry on transient server errors
+        if ((response.statusCode == 502 || response.statusCode == 503) &&
+            attempt < _maxRetries) {
+          await _retryDelay(attempt);
+          continue;
+        }
+
+        return response;
+      } on TimeoutException {
+        if (attempt >= _maxRetries) {
+          throw ApiException(
+            '$action fehlgeschlagen: Zeitüberschreitung – Server antwortet nicht.',
+          );
+        }
+        await _retryDelay(attempt);
+      } on SocketException catch (e) {
+        if (attempt >= _maxRetries) {
+          throw ApiException(
+            '$action fehlgeschlagen: Server nicht erreichbar (${e.message}).',
+          );
+        }
+        await _retryDelay(attempt);
+      } catch (e) {
+        if (e is ApiException) rethrow;
+        if (attempt >= _maxRetries) {
+          throw ApiException('$action fehlgeschlagen: $e');
+        }
+        await _retryDelay(attempt);
+      }
     }
+    // Should not reach here, but just in case
+    throw ApiException('$action fehlgeschlagen nach $_maxRetries Versuchen.');
+  }
+
+  Future<void> _retryDelay(int attempt) async {
+    final baseMs = _initialRetryDelay.inMilliseconds * pow(2, attempt);
+    final jitter = (baseMs * 0.25 * (DateTime.now().millisecond / 1000)).toInt();
+    await Future.delayed(Duration(milliseconds: baseMs.toInt() + jitter));
   }
 
   void _checkStatus(http.Response response, String action) {

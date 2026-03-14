@@ -389,6 +389,8 @@ async def terminal_websocket(websocket: WebSocket, session_id: str):
                     rows = message.get("rows", 30)
                     manager.resize(session_id, cols, rows)
                     initial_resize.set()
+                elif msg_type == "ping":
+                    await websocket.send_json({"type": "pong"})
         except WebSocketDisconnect:
             pass
 

@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/widgets.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:xterm/xterm.dart';
@@ -19,6 +21,7 @@ class TerminalService with WidgetsBindingObserver {
   StreamSubscription? _subscription;
   bool _disposed = false;
   bool _sessionEnded = false;
+  bool _connected = false;
 
   final _questionDetector = QuestionDetector();
   Timer? _questionCheckTimer;
@@ -30,6 +33,19 @@ class TerminalService with WidgetsBindingObserver {
   static const _maxDelay = Duration(seconds: 30);
   int _reconnectAttempts = 0;
   Timer? _reconnectTimer;
+
+  // Heartbeat
+  static const _pingInterval = Duration(seconds: 20);
+  static const _pongTimeout = Duration(seconds: 10);
+  Timer? _pingTimer;
+  Timer? _pongTimer;
+
+  // Input buffer – queues input while disconnected
+  final _inputBuffer = Queue<String>();
+  static const _maxBufferedInputs = 100;
+
+  // Network connectivity
+  StreamSubscription? _connectivitySubscription;
 
   TerminalService({
     required this.config,
@@ -50,12 +66,36 @@ class TerminalService with WidgetsBindingObserver {
       (_) => _checkForQuestion(),
     );
 
+    // Listen for network connectivity changes
+    _connectivitySubscription = Connectivity()
+        .onConnectivityChanged
+        .listen(_onConnectivityChanged);
+
     _connectWebSocket();
+  }
+
+  void _onConnectivityChanged(List<ConnectivityResult> results) {
+    if (_disposed || _sessionEnded) return;
+
+    final hasConnection = results.any((r) => r != ConnectivityResult.none);
+
+    if (hasConnection && !_connected && _reconnectAttempts > 0) {
+      // Network came back – attempt immediate reconnect
+      _reconnectTimer?.cancel();
+      terminal.write(
+        '\r\n\x1b[33m[Netzwerk verfügbar – verbinde sofort...]\x1b[0m\r\n',
+      );
+      _connectWebSocket();
+    }
   }
 
   void _connectWebSocket() {
     _subscription?.cancel();
-    _channel?.sink.close();
+    _stopHeartbeat();
+    // Close previous channel without triggering onDone
+    try {
+      _channel?.sink.close();
+    } catch (_) {}
 
     final uri = Uri.parse(
       '${config.wsBaseUrl}/ws/terminal/$sessionId?api_key=${Uri.encodeComponent(config.apiKey)}',
@@ -68,52 +108,70 @@ class TerminalService with WidgetsBindingObserver {
       onDone: _onDone,
     );
 
-    // Forward terminal input to WebSocket
-    terminal.onOutput = (data) {
-      if (_channel != null && !_disposed) {
-        try {
-          _channel!.sink.add(jsonEncode({
-            'type': 'input',
-            'data': data,
-          }));
-        } catch (_) {
-          // Sink closed – reconnect will handle it
-        }
-      }
-    };
+    // Forward terminal input to WebSocket (or buffer if disconnected)
+    terminal.onOutput = _onTerminalOutput;
 
     terminal.onResize = (cols, rows, pixelWidth, pixelHeight) {
-      if (_channel != null && !_disposed) {
-        try {
-          _channel!.sink.add(jsonEncode({
-            'type': 'resize',
-            'cols': cols,
-            'rows': rows,
-          }));
-        } catch (_) {}
-      }
+      _sendJson({
+        'type': 'resize',
+        'cols': cols,
+        'rows': rows,
+      });
     };
 
     // Send initial resize immediately so the server knows our dimensions
-    // before sending history. The terminal has already been laid out at
-    // this point (connect() is called in addPostFrameCallback).
+    // before sending history.
+    _sendJson({
+      'type': 'resize',
+      'cols': terminal.viewWidth,
+      'rows': terminal.viewHeight,
+    });
+  }
+
+  void _onTerminalOutput(String data) {
+    if (_disposed) return;
+
+    if (_connected) {
+      _sendJson({'type': 'input', 'data': data});
+    } else {
+      // Buffer input while disconnected
+      if (_inputBuffer.length < _maxBufferedInputs) {
+        _inputBuffer.add(data);
+      }
+    }
+  }
+
+  void _flushInputBuffer() {
+    while (_inputBuffer.isNotEmpty) {
+      final data = _inputBuffer.removeFirst();
+      _sendJson({'type': 'input', 'data': data});
+    }
+  }
+
+  bool _sendJson(Map<String, dynamic> data) {
+    if (_channel == null || _disposed) return false;
     try {
-      _channel!.sink.add(jsonEncode({
-        'type': 'resize',
-        'cols': terminal.viewWidth,
-        'rows': terminal.viewHeight,
-      }));
-    } catch (_) {}
+      _channel!.sink.add(jsonEncode(data));
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   void _onMessage(dynamic message) {
     if (_disposed) return;
 
-    // Successful message means connection is healthy
-    if (_reconnectAttempts > 0) {
-      _reconnectAttempts = 0;
+    final wasReconnecting = _reconnectAttempts > 0;
+
+    // Connection confirmed healthy
+    _connected = true;
+    _reconnectAttempts = 0;
+    _startHeartbeat();
+
+    if (wasReconnecting) {
       terminal.write('\r\n\x1b[32m[Verbindung wiederhergestellt]\x1b[0m\r\n');
       TerminalForegroundService.instance.clearQuestion(sessionTitle);
+      _flushInputBuffer();
     }
 
     try {
@@ -127,25 +185,68 @@ class TerminalService with WidgetsBindingObserver {
         _questionDetector.onOutput(text);
       } else if (type == 'exit') {
         _sessionEnded = true;
+        _stopHeartbeat();
         terminal.write('\r\n\x1b[33m[Session beendet]\x1b[0m\r\n');
         TerminalForegroundService.instance.showQuestion(
           sessionTitle,
           'Session beendet.',
         );
+      } else if (type == 'pong') {
+        // Pong received – cancel the timeout timer
+        _pongTimer?.cancel();
       }
     } catch (e) {
       // Ignore malformed messages
     }
   }
 
+  // -- Heartbeat --
+
+  void _startHeartbeat() {
+    _stopHeartbeat();
+    _pingTimer = Timer.periodic(_pingInterval, (_) => _sendPing());
+  }
+
+  void _stopHeartbeat() {
+    _pingTimer?.cancel();
+    _pongTimer?.cancel();
+  }
+
+  void _sendPing() {
+    if (_disposed || !_connected) return;
+
+    final sent = _sendJson({'type': 'ping'});
+    if (!sent) return;
+
+    // Start pong timeout – if no pong arrives, connection is dead
+    _pongTimer?.cancel();
+    _pongTimer = Timer(_pongTimeout, () {
+      if (_disposed || _sessionEnded) return;
+      _connected = false;
+      _stopHeartbeat();
+      terminal.write(
+        '\r\n\x1b[31m[Keine Antwort vom Server – Verbindung verloren]\x1b[0m\r\n',
+      );
+      _subscription?.cancel();
+      try {
+        _channel?.sink.close();
+      } catch (_) {}
+      _scheduleReconnect();
+    });
+  }
+
   void _onError(dynamic error) {
     if (_disposed) return;
+    _connected = false;
+    _stopHeartbeat();
     final message = _friendlyError(error);
     terminal.write('\r\n\x1b[31m[Verbindungsfehler: $message]\x1b[0m\r\n');
     // Don't schedule reconnect here – onDone will follow
   }
 
   void _onDone() {
+    _connected = false;
+    _stopHeartbeat();
     if (_disposed || _sessionEnded) return;
     _scheduleReconnect();
   }
@@ -251,11 +352,15 @@ class TerminalService with WidgetsBindingObserver {
   void dispose() {
     _disposed = true;
     _reconnectTimer?.cancel();
+    _pingTimer?.cancel();
+    _pongTimer?.cancel();
     _questionCheckTimer?.cancel();
+    _connectivitySubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _questionDetector.reset();
     _subscription?.cancel();
     _channel?.sink.close();
+    _inputBuffer.clear();
     TerminalForegroundService.instance.stop();
   }
 }
