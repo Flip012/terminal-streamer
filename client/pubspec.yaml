@@ -17,6 +17,7 @@ dependencies:
   provider: ^6.1.0
   web: ^1.1.1
   flutter_local_notifications: ^18.0.0
+  flutter_foreground_task: ^8.13.0
 
 dev_dependencies:
   flutter_test:

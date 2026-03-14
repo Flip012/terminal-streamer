@@ -6,6 +6,7 @@ import 'package:xterm/xterm.dart';
 import '../models/server_config.dart';
 import 'question_detector.dart';
 import 'notification_service.dart';
+import 'foreground_service.dart';
 
 class TerminalService with WidgetsBindingObserver {
   final ServerConfig config;
@@ -30,6 +31,9 @@ class TerminalService with WidgetsBindingObserver {
 
   void connect() {
     WidgetsBinding.instance.addObserver(this);
+
+    // Start foreground service to keep WebSocket alive in background
+    TerminalForegroundService.instance.start(sessionTitle: sessionTitle);
 
     // Periodically check for questions (every 500ms)
     _questionCheckTimer = Timer.periodic(
@@ -115,6 +119,7 @@ class TerminalService with WidgetsBindingObserver {
     if (!_appInBackground) {
       // App came to foreground — cancel any pending notification
       NotificationService.instance.cancelNotification(sessionId.hashCode);
+      TerminalForegroundService.instance.clearQuestion(sessionTitle);
     }
   }
 
@@ -125,9 +130,14 @@ class TerminalService with WidgetsBindingObserver {
 
     final question = _questionDetector.checkForQuestion();
     if (question != null) {
+      final truncated =
+          question.length > 150 ? '${question.substring(0, 147)}...' : question;
+
+      // Show in both the foreground service notification and the alert notification
+      TerminalForegroundService.instance.showQuestion(sessionTitle, truncated);
       NotificationService.instance.showQuestionNotification(
         sessionTitle: sessionTitle,
-        questionText: question.length > 150 ? '${question.substring(0, 147)}...' : question,
+        questionText: truncated,
         sessionHash: sessionId.hashCode,
       );
     }
@@ -140,5 +150,6 @@ class TerminalService with WidgetsBindingObserver {
     _questionDetector.reset();
     _subscription?.cancel();
     _channel?.sink.close();
+    TerminalForegroundService.instance.stop();
   }
 }
