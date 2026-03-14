@@ -455,18 +455,11 @@ class TerminalManager:
                     _restored=True,
                 )
 
-                # Restore pyte screen state
+                # Fresh pyte screen — don't replay old snapshot to avoid stale content
                 session._pyte_screen = pyte.Screen(session.cols, session.rows)
                 session._pyte_stream = pyte.ByteStream(session._pyte_screen)
-                snapshot_b64 = entry.get("screen_snapshot_b64", "")
-                if snapshot_b64:
-                    try:
-                        snapshot = base64.b64decode(snapshot_b64)
-                        session._pyte_stream.feed(snapshot)
-                    except Exception:
-                        pass
 
-                # Restore output history for question detection
+                # Restore output history only for question detection buffer
                 history_b64 = entry.get("output_history_b64", "")
                 if history_b64:
                     try:
